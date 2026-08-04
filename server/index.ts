@@ -1,3 +1,9 @@
+// 确保代理环境变量可见（用户本地开启了翻墙代理，Node 进程需显式设置）
+// socks5h:// 表示让代理服务器做 DNS 解析，避免本地 DNS 污染
+if (!process.env.ALL_PROXY && !process.env.all_proxy) {
+  process.env.ALL_PROXY = 'socks5h://127.0.0.1:1080'
+}
+
 import express from 'express'
 import cors from 'cors'
 import {
@@ -8,8 +14,9 @@ import {
   getStockQuote,
   getStockHistory,
 } from './fundService.js'
-import { searchGlobalNews } from './newsService.js'
+import { searchGlobalNews, translateText } from './newsService.js'
 import { ok, fail, mapWithConcurrency, sleep } from './utils.js'
+import type { NavPoint, FundMetrics, Holding } from './types.js'
 
 const app = express()
 app.use(cors())
@@ -28,7 +35,7 @@ app.get('/api/funds/search', async (req, res) => {
     res.json(ok(list))
   } catch (e) {
     console.error(e)
-    res.status(500).json(fail(e.message))
+    res.status(500).json(fail((e as Error).message))
   }
 })
 
@@ -37,7 +44,6 @@ app.get('/api/funds/:code', async (req, res) => {
   try {
     const { code } = req.params
     const daysParam = String(req.query.days || '365')
-    // 支持 days=all（成立来全部历史）
     const days = daysParam === 'all' || daysParam === 'ALL' ? 'all' : (parseInt(daysParam) || 365)
     const [detail, navSeries] = await Promise.all([getFundDetail(code), getNavHistory(code, days)])
     const metrics = computeMetrics(navSeries)
@@ -50,7 +56,7 @@ app.get('/api/funds/:code', async (req, res) => {
     )
   } catch (e) {
     console.error(e)
-    res.status(500).json(fail(e.message))
+    res.status(500).json(fail((e as Error).message))
   }
 })
 
@@ -62,75 +68,82 @@ app.get('/api/funds/:code/holdings', async (req, res) => {
     if (holdings.length === 0) {
       return res.json(ok([]))
     }
-    // 限制并发为 3，避免 eastmoney 行情服务器因并发过高而 socket hang up
+    // 限制并发为 3，避免行情服务器因并发过高而 socket hang up
     const enriched = await mapWithConcurrency(holdings, 3, async (h) => {
       try {
-        // 请求间稍微间隔
         await sleep(120)
         const [quote, history] = await Promise.all([
-          getStockQuote(h.code),
-          getStockHistory(h.code, 365),
+          getStockQuote(h.code as string),
+          getStockHistory(h.code as string, 365),
         ])
-          const ytdStart =
-            history.find((t) => t.date >= new Date().getFullYear() + '-01-01') || history[0]
-          return {
-            ...h,
-            trend: history,
-            latestPrice: quote?.latestPrice ?? 0,
-            latestChange: quote?.latestChange ?? 0,
-            ytdChange:
-              quote && ytdStart
-                ? +(((quote.latestPrice - ytdStart.price) / ytdStart.price) * 100).toFixed(2)
-                : 0,
-            marketCap: quote?.marketCap ?? '',
-            peRatio: quote?.peRatio ? parseFloat(quote.peRatio) : 0,
-            // 名称用重仓股解析得到的（腾讯行情名称为 GBK 编码会乱码）
-            name: h.name,
-            industry: h.industry || guessIndustry(h.name),
-          }
-        } catch (e) {
-          return { ...h, trend: [], latestPrice: 0, latestChange: 0, ytdChange: 0, marketCap: '', peRatio: 0, industry: guessIndustry(h.name) }
+        const ytdStart = history.find((t) => t.date >= new Date().getFullYear() + '-01-01') || history[0]
+        return {
+          ...h,
+          trend: history,
+          latestPrice: quote?.latestPrice ?? 0,
+          latestChange: quote?.latestChange ?? 0,
+          ytdChange:
+            quote && ytdStart
+              ? +(((quote.latestPrice - ytdStart.price) / ytdStart.price) * 100).toFixed(2)
+              : 0,
+          marketCap: quote?.marketCap ?? '',
+          peRatio: quote?.peRatio ?? 0,
+          name: h.name,
+          industry: h.industry || guessIndustry(h.name as string),
         }
-      })
+      } catch (e) {
+        return { ...h, trend: [], latestPrice: 0, latestChange: 0, ytdChange: 0, marketCap: '', peRatio: 0, industry: guessIndustry(h.name as string) }
+      }
+    })
     res.json(ok(enriched))
   } catch (e) {
     console.error(e)
-    res.status(500).json(fail(e.message))
+    res.status(500).json(fail((e as Error).message))
   }
 })
 
-// 新闻搜索
+// 新闻搜索（默认 ±7 天）
 app.get('/api/news/search', async (req, res) => {
   try {
     const { keyword, fundName, stockName, date } = req.query
-    const rangeDays = parseInt(req.query.rangeDays) || 5
+    const rangeDays = parseInt(String(req.query.rangeDays)) || 7
     if (!date) return res.status(400).json(fail('date is required', 400))
-    const news = await searchGlobalNews({ keyword, fundName, stockName, date, rangeDays })
+    const news = await searchGlobalNews({
+      keyword: String(keyword || ''),
+      fundName: String(fundName || ''),
+      stockName: String(stockName || ''),
+      date: String(date),
+      rangeDays,
+    })
     res.json(ok(news))
   } catch (e) {
     console.error(e)
-    res.status(500).json(fail(e.message))
+    res.status(500).json(fail((e as Error).message))
+  }
+})
+
+// 翻译接口（用于非中文新闻）
+app.post('/api/translate', async (req, res) => {
+  try {
+    const { text, target } = req.body || {}
+    if (!text) return res.status(400).json(fail('text is required', 400))
+    const translated = await translateText(String(text), String(target || 'zh'))
+    res.json(ok({ translated }))
+  } catch (e) {
+    console.error(e)
+    res.status(500).json(fail((e as Error).message))
   }
 })
 
 // 健康检查
-app.get('/api/health', (req, res) => {
+app.get('/api/health', (_req, res) => {
   res.json(ok({ status: 'ok', time: new Date().toISOString() }))
 })
 
 // ============ 指标计算 ============
-function computeMetrics(navSeries) {
+function computeMetrics(navSeries: NavPoint[]): FundMetrics {
   if (!navSeries || navSeries.length === 0) {
-    return {
-      latestNav: 0,
-      latestGrowth: 0,
-      totalReturn: 0,
-      ytdReturn: 0,
-      maxDrawdown: 0,
-      sharpeRatio: 0,
-      volatility: 0,
-      scale: '',
-    }
+    return { latestNav: 0, latestGrowth: 0, totalReturn: 0, ytdReturn: 0, maxDrawdown: 0, sharpeRatio: 0, volatility: 0, scale: '' }
   }
   const latest = navSeries[navSeries.length - 1]
   const first = navSeries[0]
@@ -145,11 +158,11 @@ function computeMetrics(navSeries) {
     const dd = ((p.nav - peak) / peak) * 100
     if (dd < maxDD) maxDD = dd
   }
-  const returns = navSeries.slice(1).map((p, i) => p.growthRate || 0)
+  const returns = navSeries.slice(1).map((p) => p.growthRate || 0)
   const mean = returns.reduce((a, b) => a + b, 0) / (returns.length || 1)
   const variance = returns.reduce((a, b) => a + (b - mean) ** 2, 0) / (returns.length || 1)
   const vol = +Math.sqrt(variance * 252).toFixed(2)
-  const sharpe = +((((totalReturn - 2) / vol) || 0)).toFixed(2)
+  const sharpe = vol ? +((totalReturn - 2) / vol).toFixed(2) : 0
   return {
     latestNav: latest.nav,
     latestGrowth: latest.growthRate,
@@ -163,8 +176,8 @@ function computeMetrics(navSeries) {
 }
 
 // ============ 行业推断 ============
-function guessIndustry(name) {
-  const map = [
+function guessIndustry(name: string): string {
+  const map: { kw: string[]; ind: string }[] = [
     { kw: ['酒', '茅台', '五粮液'], ind: '白酒' },
     { kw: ['银行'], ind: '银行' },
     { kw: ['保险', '平安'], ind: '保险' },
@@ -184,5 +197,5 @@ function guessIndustry(name) {
 }
 
 app.listen(PORT, () => {
-  console.log(`\n  🚀 基金洞察后端服务已启动: http://localhost:${PORT}\n`)
+  console.log(`\n  🚀 基金洞察后端服务已启动 (TypeScript): http://localhost:${PORT}\n`)
 })

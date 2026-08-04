@@ -107,6 +107,11 @@ export const FundSelector: React.FC<Props> = ({ funds, loadingCodes, onAdd, onRe
                 </span>
                 <span className="truncate ml-2">{f.manager || '--'}</span>
               </div>
+              {f.establishDate && (
+                <div className="mt-1.5 text-[10px] text-slate-400">
+                  成立于 {f.establishDate}
+                </div>
+              )}
             </div>
           )
         })}

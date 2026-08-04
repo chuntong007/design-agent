@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { LineChart, PieChart, Newspaper, Anchor, Info, X, Sparkles, Wifi } from 'lucide-react'
-import type { Fund, Holding } from './types'
+import type { Fund, Holding, PinnedNews } from './types'
 import { fundApi } from './api'
 import { FundSelector } from './components/FundSelector'
 import { MetricsBar } from './components/MetricsBar'
@@ -90,6 +90,8 @@ const App: React.FC = () => {
   const [newsOpen, setNewsOpen] = useState(false)
   const [trigger, setTrigger] = useState<{ fund: Fund; date: string; nav: number } | null>(null)
   const [anchor, setAnchor] = useState<{ fund: Fund; date: string; nav: number } | null>(null)
+  // 用户手动选中的锚定新闻（关联到净值点，图表上标注）
+  const [pinnedNews, setPinnedNews] = useState<PinnedNews | null>(null)
 
   const [showHelp, setShowHelp] = useState(false)
 
@@ -385,6 +387,7 @@ const App: React.FC = () => {
                   anchorDate={anchor?.date ?? null}
                   onPointClick={handlePointClick}
                   newsDates={newsDates}
+                  pinnedNews={pinnedNews}
                 />
                 )}
               </div>
@@ -443,6 +446,8 @@ const App: React.FC = () => {
                   anchorInfo={anchor}
                   onAnchor={setAnchor}
                   onClose={handleCloseNews}
+                  pinnedNews={pinnedNews}
+                  onPinNews={setPinnedNews}
                 />
               </Card>
             </div>
@@ -483,10 +488,10 @@ const App: React.FC = () => {
             </div>
             <div className="space-y-3 text-sm text-slate-600">
               {[
-                { t: '多基金对比', d: '点击右上角复选框选择多只基金，主图将叠加显示净值走势；可在「归一化 / 绝对净值」间切换以直观对比涨跌幅。' },
-                { t: '重仓股参照', d: '点击基金卡片切换「当前查看」的基金，下方展示其重仓股占比、Top5 走势对比及明细指标。' },
-                { t: '新闻检索', d: '在主图上点击任意净值点位，右侧自动通过 GDELT 检索该日期 ±5 天内的全球新闻资讯，了解当时发生了什么。' },
-                { t: '净值锚定', d: '在新闻面板点击「锚定此净值点」，主图会出现橙色锚定线。之后点击其他日期时，新闻面板底部会同步显示锚定时期事件，便于跨时期对照。' },
+                { t: '多基金对比', d: '搜索添加多只基金，主图叠加显示净值走势；支持「归一化 / 绝对净值」切换，以及 1月 / 3月 / 6月 / 1年 / 成立来 区间切换。' },
+                { t: '重仓股参照', d: '点击基金卡片切换「当前查看」的基金，下方展示其重仓股占比、Top5 走势对比及明细指标（含港股）。' },
+                { t: '新闻检索', d: '在主图上点击任意净值点位，右侧自动检索该日期 ±7 天内的全球新闻；非中文新闻可点击「翻译」按钮查看中文。' },
+                { t: '锚定新闻', d: '在新闻卡片点击「锚定」，将关联性强的新闻手动锚定到该净值点；主图会出现 📰 标注和橙色锚定线，便于跨时期对照。' },
               ].map((it, i) => (
                 <div key={i} className="flex gap-3">
                   <span className="shrink-0 w-6 h-6 rounded-full bg-brand-50 text-brand-600 flex items-center justify-center text-xs font-bold">

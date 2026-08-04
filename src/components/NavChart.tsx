@@ -1,6 +1,6 @@
 import React, { useMemo, useRef, useEffect } from 'react'
 import ReactECharts from 'echarts-for-react'
-import type { Fund } from '../types'
+import type { Fund, PinnedNews } from '../types'
 
 interface Props {
   funds: Fund[]
@@ -9,9 +9,10 @@ interface Props {
   anchorDate: string | null
   onPointClick: (fund: Fund, date: string, nav: number) => void
   newsDates: string[]
+  pinnedNews: PinnedNews | null
 }
 
-export const NavChart: React.FC<Props> = ({ funds, selectedIds, normalized, anchorDate, onPointClick, newsDates }) => {
+export const NavChart: React.FC<Props> = ({ funds, selectedIds, normalized, anchorDate, onPointClick, newsDates, pinnedNews }) => {
   const chartRef = useRef<any>(null)
   const selectedFunds = useMemo(
     () => funds.filter((f) => selectedIds.includes(f.id)),
@@ -126,10 +127,11 @@ export const NavChart: React.FC<Props> = ({ funds, selectedIds, normalized, anch
     }
   }, [selectedFunds, normalized, dates, anchorDate])
 
-  // 重新构建带锚定线的 option（移除逐日新闻 markLine，避免数据量大时卡死）
+  // 重新构建带锚定线 + 锚定新闻标注的 option
   const fullOption = useMemo(() => {
     const opt = { ...option }
     const markLines: any[] = []
+    const markPoints: any[] = []
 
     // 仅锚定线（高亮）
     if (anchorDate && dates.includes(anchorDate)) {
@@ -151,11 +153,56 @@ export const NavChart: React.FC<Props> = ({ funds, selectedIds, normalized, anch
       })
     }
 
+    // 锚定新闻事件标注（📰 标题气泡）
+    if (pinnedNews && dates.includes(pinnedNews.date)) {
+      const firstSeries = selectedFunds[0]
+      let yVal = 0
+      if (firstSeries) {
+        const point = firstSeries.navSeries.find((p) => p.date === pinnedNews.date)
+        yVal = point
+          ? normalized
+            ? +(((point.nav - firstSeries.navSeries[0].nav) / firstSeries.navSeries[0].nav) * 100).toFixed(2)
+            : point.nav
+          : 0
+      }
+      // 标题片段（截断）
+      const titleShort = pinnedNews.news.title.length > 12
+        ? pinnedNews.news.title.slice(0, 12) + '…'
+        : pinnedNews.news.title
+      markPoints.push({
+        coord: [pinnedNews.date, yVal],
+        symbol: 'pin',
+        symbolSize: 46,
+        symbolOffset: [0, -30],
+        itemStyle: { color: '#f59e0b', borderColor: '#fff', borderWidth: 2, shadowBlur: 10, shadowColor: 'rgba(245,158,11,0.5)' },
+        label: {
+          show: true,
+          position: 'top',
+          distance: 4,
+          formatter: titleShort,
+          fontSize: 10,
+          fontWeight: 600,
+          color: '#92400e',
+          backgroundColor: 'rgba(255,255,255,0.92)',
+          padding: [3, 6],
+          borderRadius: 4,
+        },
+        name: 'pinned_news',
+        value: pinnedNews.news.title,
+        tooltip: { trigger: 'item', formatter: () => `📰 <b>${pinnedNews.news.title}</b><br/>${pinnedNews.date} · ${pinnedNews.fundName}` },
+      })
+    }
+
+    // 添加 markLine（锚定线）
     if (markLines.length && opt.series) {
       opt.series = opt.series.map((s: any, i: number) => (i === 0 ? { ...s, markLine: { silent: true, symbol: 'none', data: markLines } } : s))
     }
+    // 添加 markPoint（锚定新闻）
+    if (markPoints.length && opt.series) {
+      opt.series = opt.series.map((s: any, i: number) => (i === 0 ? { ...s, markPoint: { silent: true, tooltip: { trigger: 'item' }, data: markPoints } } : s))
+    }
     return opt
-  }, [option, anchorDate, dates])
+  }, [option, anchorDate, dates, pinnedNews, selectedFunds, normalized])
 
   const onChartReady = (instance: any) => {
     if (!instance) return

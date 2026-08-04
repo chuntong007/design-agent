@@ -1,99 +1,138 @@
 import { fetchJson, cached, setCache } from './utils.js'
+import type { NavPoint, Holding, StockQuote, FundDetail } from './types.js'
+
+interface SearchResultItem {
+  code: string
+  name: string
+  type: string
+  pinyin?: string
+}
 
 // ============ 基金列表搜索 ============
 // 天天基金 fund_search API
-export async function searchFunds(keyword) {
+export async function searchFunds(keyword: string): Promise<SearchResultItem[]> {
   const url = `https://fundsuggest.eastmoney.com/FundSearch/api/FundSearchPageAPI.ashx?m=1&key=${encodeURIComponent(keyword)}&pageIndex=0&pageSize=20&IsNeedBaseInfo=1&IsNeedZTInfo=1`
   const cacheKey = `search:${keyword}`
-  const hit = cached(cacheKey)
+  const hit = cached<SearchResultItem[]>(cacheKey)
   if (hit) return hit
   try {
     const text = await fetchJson(url)
     const jsonpMatch = text.match(/\{[\s\S]*\}/)
     if (!jsonpMatch) return []
     const data = JSON.parse(jsonpMatch[0])
-    const list = (data.Datas || []).map((d) => ({
+    const list: SearchResultItem[] = (data.Datas || []).map((d: any) => ({
       code: d.CODE,
-      name: d.NAME.replace(/<[^>]+>/g, ''),
+      name: String(d.NAME || '').replace(/<[^>]+>/g, ''),
       type: d.FundBaseInfo?.FTYPE || '',
       pinyin: d.PINYIN,
     }))
     setCache(cacheKey, list)
     return list
   } catch (e) {
-    console.error('searchFunds error:', e.message)
+    console.error('searchFunds error:', (e as Error).message)
     return []
   }
 }
 
-// ============ 基金详情（名称、类型、经理、规模、净值等） ============
-export async function getFundDetail(code) {
+// ============ 基金详情（名称、类型、经理、规模、净值、成立日期等） ============
+// 从 pingzhongdata 接口一次性提取全部信息（该接口稳定可用）
+export async function getFundDetail(code: string): Promise<FundDetail> {
   const cacheKey = `detail:${code}`
-  const hit = cached(cacheKey, 30 * 60 * 1000)
+  const hit = cached<FundDetail>(cacheKey, 30 * 60 * 1000)
   if (hit) return hit
   try {
-    const url = `https://fundgz.1234567.com.cn/js/${code}.js`
-    const text = await fetchJson(url)
-    const m = text.match(/\{[\s\S]*\}/)
-    let realtime = null
-    if (m) {
+    const pzUrl = `https://fund.eastmoney.com/pingzhongdata/${code}.js`
+    const pzText = await fetchJson(pzUrl, { headers: { Referer: `https://fund.eastmoney.com/${code}.html` } })
+
+    // 基金名称
+    const nameMatch = pzText.match(/var\s+fS_name\s*=\s*"([^"]+)"/)
+    const name = nameMatch ? nameMatch[1] : code
+
+    // 基金经理
+    let manager = ''
+    const mgrMatch = pzText.match(/Data_currentFundManager\s*=\s*\[([\s\S]*?)\]/)
+    if (mgrMatch) {
       try {
-        realtime = JSON.parse(m[0])
+        const mgrs = JSON.parse('[' + mgrMatch[1] + ']')
+        if (mgrs.length > 0) manager = mgrs[0].name || ''
       } catch {}
     }
-    // 详细信息：f10 页面接口
-    const detailUrl = `https://fundf10.eastmoney.com/jjjz_${code}.html`
-    const html = await fetchJson(detailUrl)
-    const name = html.match(/<title>([\s\S]*?)\(/)?.[1]?.trim() || code
-    // 从 fundinfo 接口获取更多信息
-    const infoUrl = `https://fundmobapi.eastmoney.com/FundMNewApi/FundMNFInfo?pageIndex=0&pageSize=30&plat=Android&appType=ttjj&product=EFund&Version=1&Uid=&deviceid=&CompanyCode=&FCODE=${code}`
-    const infoText = await fetchJson(infoUrl)
-    let info = {}
-    try {
-      info = JSON.parse(infoText)
-    } catch {}
-    const expansion = info?.Expansion || {}
-    const detail = {
+
+    // 成立日期：从 Data_netWorthTrend 第一个时间戳推断
+    let establishDate = ''
+    const ntMatch = pzText.match(/Data_netWorthTrend\s*=\s*(\[[\s\S]*?\])\s*;/)
+    if (ntMatch) {
+      try {
+        const arr = JSON.parse(ntMatch[1])
+        if (arr.length > 0) establishDate = formatDateFromTs(arr[0].x)
+      } catch {}
+    }
+
+    // 最新净值（从最后一个时间戳）
+    let netValue: number | null = null
+    let netValueDate = ''
+    let growthRate: number | null = null
+    if (ntMatch) {
+      try {
+        const arr = JSON.parse(ntMatch[1])
+        if (arr.length > 0) {
+          const last = arr[arr.length - 1]
+          netValue = +Number(last.y).toFixed(4)
+          netValueDate = formatDateFromTs(last.x)
+          growthRate = last.equityReturn != null ? +Number(last.equityReturn).toFixed(2) : null
+        }
+      } catch {}
+    }
+
+    const detail: FundDetail = {
       code,
-      name: expansion?.SHORTNAME || name,
-      type: expansion?.FTYPE || '',
-      manager: expansion?.JJJL || expansion?.JJL || '',
-      company: expansion?.JJGSID || '',
-      scale: expansion?.ENDNAV || '',
-      netValue: expansion?.DWJZ ? parseFloat(expansion.DWJZ) : realtime?.dwjz ? parseFloat(realtime.dwjz) : null,
-      netValueDate: expansion?.FSRQ || realtime?.jzrq || '',
-      growthRate: realtime?.gszzl ? parseFloat(realtime.gszzl) : expansion?.RZDF ? parseFloat(expansion.RZDF) : null,
+      name,
+      type: guessFundType(name),
+      manager,
+      company: '',
+      scale: '',
+      netValue,
+      netValueDate,
+      growthRate,
+      establishDate,
     }
     setCache(cacheKey, detail)
     return detail
   } catch (e) {
-    console.error('getFundDetail error:', e.message)
-    return { code, name: code, type: '', manager: '', company: '', scale: '', netValue: null, netValueDate: '', growthRate: null }
+    console.error('getFundDetail error:', (e as Error).message)
+    return { code, name: code, type: '', manager: '', company: '', scale: '', netValue: null, netValueDate: '', growthRate: null, establishDate: '' }
   }
+}
+
+// 根据名称推断基金类型
+function guessFundType(name: string): string {
+  if (name.includes('指数') || name.includes('ETF')) return '指数型'
+  if (name.includes('货币')) return '货币型'
+  if (name.includes('债券') || name.includes('债')) return '债券型'
+  if (name.includes('混合')) return '混合型'
+  if (name.includes('QDII')) return 'QDII'
+  return '股票型'
 }
 
 // ============ 历史净值序列 ============
 // 统一使用 pingzhongdata 接口获取完整历史，再按 days 参数切片
-// pingzhongdata 返回基金成立以来全部净值，lsjz 近期只返回 20 条不可用
-export async function getNavHistory(code, days = 365) {
-  const isAll = days === 'all' || days === 'ALL'
-  const cacheKey = `nav:${code}:full` // 统一缓存完整历史
-  let fullList = cached(cacheKey, 24 * 60 * 60 * 1000) // 缓存 24 小时
+export async function getNavHistory(code: string, days: number | 'all' = 365): Promise<NavPoint[]> {
+  const isAll = days === 'all'
+  const cacheKey = `nav:${code}:full`
+  let fullList = cached<NavPoint[]>(cacheKey, 24 * 60 * 60 * 1000)
 
   if (!fullList) {
     fullList = await getNavHistoryFromPingzhong(code)
     if (fullList.length > 0) {
       setCache(cacheKey, fullList, 24 * 60 * 60 * 1000)
     } else {
-      // pingzhongdata 失败时降级到 lsjz
       fullList = await getNavHistoryFromLsjz(code)
     }
   }
 
   if (isAll || !fullList.length) return fullList
 
-  // 按 days 切片：取最近 days 天的数据
-  const daysNum = parseInt(days) || 365
+  const daysNum = typeof days === 'number' ? days : 365
   const cutoff = new Date()
   cutoff.setDate(cutoff.getDate() - daysNum)
   const cutoffStr = `${cutoff.getFullYear()}-${String(cutoff.getMonth() + 1).padStart(2, '0')}-${String(cutoff.getDate()).padStart(2, '0')}`
@@ -101,7 +140,7 @@ export async function getNavHistory(code, days = 365) {
 }
 
 // 通过 pingzhongdata 接口获取基金成立以来全部历史净值
-async function getNavHistoryFromPingzhong(code) {
+async function getNavHistoryFromPingzhong(code: string): Promise<NavPoint[]> {
   try {
     const url = `https://fund.eastmoney.com/pingzhongdata/${code}.js`
     const text = await fetchJson(url, {
@@ -110,7 +149,7 @@ async function getNavHistoryFromPingzhong(code) {
     const m = text.match(/Data_netWorthTrend\s*=\s*(\[[\s\S]*?\])\s*;/)
     if (!m) return []
     const arr = JSON.parse(m[1])
-    const list = arr.map((d) => ({
+    const list: NavPoint[] = arr.map((d: any) => ({
       date: formatDateFromTs(d.x),
       nav: +Number(d.y).toFixed(4),
       growthRate: d.equityReturn != null ? +Number(d.equityReturn).toFixed(2) : 0,
@@ -118,13 +157,13 @@ async function getNavHistoryFromPingzhong(code) {
     list.sort((a, b) => (a.date < b.date ? -1 : 1))
     return list
   } catch (e) {
-    console.error('getNavHistoryFromPingzhong error:', e.message)
+    console.error('getNavHistoryFromPingzhong error:', (e as Error).message)
     return []
   }
 }
 
 // 降级方案：通过 lsjz 接口获取（近期只返回 20 条，仅作备用）
-async function getNavHistoryFromLsjz(code) {
+async function getNavHistoryFromLsjz(code: string): Promise<NavPoint[]> {
   try {
     const end = new Date()
     const start = new Date()
@@ -136,7 +175,7 @@ async function getNavHistoryFromLsjz(code) {
       headers: { Referer: `https://fundf10.eastmoney.com/jjjz_${code}.html` },
     })
     const data = JSON.parse(text)
-    const list = (data?.Data?.LSJZList || []).map((d) => ({
+    const list: NavPoint[] = (data?.Data?.LSJZList || []).map((d: any) => ({
       date: d.FSRQ,
       nav: parseFloat(d.DWJZ),
       growthRate: d.JZZZL ? parseFloat(d.JZZZL) : 0,
@@ -144,29 +183,27 @@ async function getNavHistoryFromLsjz(code) {
     list.sort((a, b) => (a.date < b.date ? -1 : 1))
     return list
   } catch (e) {
-    console.error('getNavHistoryFromLsjz error:', e.message)
+    console.error('getNavHistoryFromLsjz error:', (e as Error).message)
     return []
   }
 }
 
-function formatDateFromTs(ts) {
+function formatDateFromTs(ts: number): string {
   const d = new Date(ts)
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
 // ============ 重仓股票 ============
 // 天天基金 fundf10 FundArchivesDatas 接口（返回 JSONP 含 HTML 表格）
-export async function getHoldings(code) {
+export async function getHoldings(code: string): Promise<Partial<Holding>[]> {
   const cacheKey = `holdings:${code}`
-  const hit = cached(cacheKey, 6 * 60 * 60 * 1000)
+  const hit = cached<Partial<Holding>[]>(cacheKey, 6 * 60 * 60 * 1000)
   if (hit) return hit
   try {
-    // 尝试当前年份的多个季度，取第一个有数据的
     const now = new Date()
     const year = now.getFullYear()
     const month = now.getMonth() + 1
-    // 构建候选 year+month 组合：当前季度、上一季度
-    const candidates = []
+    const candidates: { y: number; m: number }[] = []
     for (let y = year; y >= year - 1 && candidates.length < 6; y--) {
       for (let m = 12; m >= 1; m--) {
         if (y === year && m > month) continue
@@ -176,8 +213,6 @@ export async function getHoldings(code) {
     }
 
     let html = ''
-    let usedYear = year
-    let usedMonth = month
     for (const c of candidates) {
       const url = `https://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=jjcc&code=${code}&topline=10&year=${c.y}&month=${c.m}`
       const text = await fetchJson(url, {
@@ -185,40 +220,32 @@ export async function getHoldings(code) {
       })
       if (text && text.includes('apidata') && text.includes('<tbody>')) {
         html = text
-        usedYear = c.y
-        usedMonth = c.m
         break
       }
     }
 
     if (!html) return []
 
-    // 提取 content 字段中的 HTML
     const contentMatch = html.match(/content:"([\s\S]*?)",arryear/)
     const contentHtml = contentMatch ? contentMatch[1] : html
 
-    // 解析表格行：<tr><td>1</td><td>...600519...</td><td>...贵州茅台...</td>...比例...</tr>
     const rowRegex = /<tr>[\s\S]*?<\/tr>/g
     const rows = contentHtml.match(rowRegex) || []
 
-    const result = []
+    const result: Partial<Holding>[] = []
     for (const row of rows) {
-      // 提取所有单元格文本
-      const cells = []
+      const cells: string[] = []
       const cellRegex = /<td[^>]*>([\s\S]*?)<\/td>/g
-      let cm
+      let cm: RegExpExecArray | null
       while ((cm = cellRegex.exec(row)) !== null) {
-        // 去除 HTML 标签，保留文本
         const text = cm[1].replace(/<[^>]+>/g, '').trim()
         cells.push(text)
       }
       if (cells.length < 5) continue
-      // 表格列：序号 | 股票代码 | 股票名称 | 最新价 | 涨跌幅 | 相关资讯 | 占净值比例 | 持股数 | 持仓市值
       const rank = parseInt(cells[0])
       if (isNaN(rank) || rank < 1 || rank > 20) continue
       const stockCode = cells[1].replace(/[^0-9]/g, '')
       const stockName = cells[2]
-      // 占比可能在第7列（index 6）
       let ratio = 0
       for (let i = 3; i < cells.length; i++) {
         const v = parseFloat(cells[i])
@@ -236,72 +263,77 @@ export async function getHoldings(code) {
     setCache(cacheKey, result)
     return result
   } catch (e) {
-    console.error('getHoldings error:', e.message)
+    console.error('getHoldings error:', (e as Error).message)
     return []
   }
 }
 
 // ============ 个股行情信息（最新价、涨跌、市值、PE） ============
 // 使用腾讯财经接口（qt.gtimg.cn），返回 GBK 编码
-export async function getStockQuote(stockCode) {
+export async function getStockQuote(stockCode: string): Promise<StockQuote | null> {
   const cacheKey = `stockq:${stockCode}`
-  const hit = cached(cacheKey, 5 * 60 * 1000)
+  const hit = cached<StockQuote>(cacheKey, 5 * 60 * 1000)
   if (hit) return hit
   try {
-    // 转换为市场前缀：6开头=sh，0/3开头=sz
-    const prefix = (stockCode.startsWith('6') || stockCode.startsWith('688')) ? 'sh' : 'sz'
+    // 判断市场前缀：A股(6/0/3开头) + 港股(5位0开头)
+    const prefix = getStockPrefix(stockCode)
     const url = `http://qt.gtimg.cn/q=${prefix}${stockCode}`
     const text = await fetchJson(url)
-    // 腾讯返回 GBK 编码，但数字和 ASCII 部分可直接解析
-    // 格式：v_sh600519="1~贵州茅台~600519~1358.98~1350.60~..."
     const m = text.match(/"([^"]+)"/)
     if (!m) return null
     const parts = m[1].split('~')
     if (parts.length < 50) return null
-    // 腾讯字段索引：3=当前价，4=昨收，31=涨跌额，32=涨跌幅，44=总市值，46=PE(动态)
-    // 名称在 parts[1]（GBK，可能乱码，用基金重仓股名称代替）
-    const result = {
+    // 港股字段布局不同，这里 A 股字段索引：3=当前价，4=昨收，32=涨跌幅，44=总市值(亿)，52=PE(TTM)
+    const result: StockQuote = {
       code: stockCode,
-      name: '', // 由调用方填充
+      name: '',
       latestPrice: parseFloat(parts[3]) || 0,
       latestChange: parseFloat(parts[32]) || 0,
       prevClose: parseFloat(parts[4]) || 0,
       ytdChange: null,
-      // parts[44] = 总市值（单位：亿元），parts[52] = PE(TTM)
       marketCap: parts[44] ? parseFloat(parts[44]).toFixed(2) + '亿' : '',
-      peRatio: parseFloat(parts[52]) ? parseFloat(parts[52]).toFixed(2) : (parseFloat(parts[46]) ? parseFloat(parts[46]).toFixed(2) : null),
+      peRatio: (parts[52] && parseFloat(parts[52])) || (parts[46] && parseFloat(parts[46])) || null,
     }
     setCache(cacheKey, result)
     return result
   } catch (e) {
-    console.error('getStockQuote error:', e.message)
+    console.error('getStockQuote error:', (e as Error).message)
     return null
   }
 }
 
+// 判断股票市场前缀（支持 A 股 + 港股）
+function getStockPrefix(stockCode: string): string {
+  // 港股：5 位数字且以 0 开头（如 00883）
+  if (stockCode.length === 5 && stockCode.startsWith('0')) return 'hk'
+  // A 股：6/688 开头 → sh，0/3 开头 → sz
+  if (stockCode.startsWith('6') || stockCode.startsWith('688')) return 'sh'
+  return 'sz'
+}
+
 // ============ 个股历史 K 线（用于重仓股走势参照） ============
 // 使用腾讯财经历史 K 线接口
-export async function getStockHistory(stockCode, days = 365) {
+export async function getStockHistory(stockCode: string, days = 365): Promise<{ date: string; price: number; change: number }[]> {
   const cacheKey = `stockh:${stockCode}:${days}`
-  const hit = cached(cacheKey, 6 * 60 * 60 * 1000)
+  const hit = cached<{ date: string; price: number; change: number }[]>(cacheKey, 6 * 60 * 60 * 1000)
   if (hit) return hit
   try {
-    const prefix = (stockCode.startsWith('6') || stockCode.startsWith('688')) ? 'sh' : 'sz'
+    const prefix = getStockPrefix(stockCode)
+    // 港股 K 线接口前缀不同
+    const symbol = prefix === 'hk' ? `hk${stockCode}` : `${prefix}${stockCode}`
     const end = new Date()
     const beg = new Date()
     beg.setDate(beg.getDate() - days)
-    const fmt = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-    const url = `http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${prefix}${stockCode},day,${fmt(beg)},${fmt(end)},640,qfq`
+    const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    const url = `http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${symbol},day,${fmt(beg)},${fmt(end)},640,qfq`
     const text = await fetchJson(url)
     const data = JSON.parse(text)
-    // 数据在 data.data.<code>.qfqday，每条：[日期, 开, 收, 高, 低, 成交量]
-    const klines = data?.data?.[`${prefix}${stockCode}`]?.qfqday || []
-    const list = klines.map((k) => {
+    const klines = data?.data?.[symbol]?.qfqday || data?.data?.[symbol]?.day || []
+    const list = klines.map((k: string[]) => {
       const date = k[0]
       const close = parseFloat(k[2])
       return { date, price: close, change: 0 }
     })
-    // 计算涨跌幅
     for (let i = list.length - 1; i > 0; i--) {
       const prev = list[i - 1].price
       list[i].change = prev ? +(((list[i].price - prev) / prev) * 100).toFixed(2) : 0
@@ -309,7 +341,7 @@ export async function getStockHistory(stockCode, days = 365) {
     setCache(cacheKey, list)
     return list
   } catch (e) {
-    console.error('getStockHistory error:', e.message)
+    console.error('getStockHistory error:', (e as Error).message)
     return []
   }
 }

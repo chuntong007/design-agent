@@ -8,6 +8,7 @@ export interface Fund {
   manager: string
   company: string
   color: string // 图表线色
+  establishDate?: string // 成立日期
   // 历史净值序列（按日期升序）
   navSeries: NavPoint[]
   // 重仓股票
@@ -61,6 +62,19 @@ export interface NewsItem {
   impactScore: number // -100 ~ 100
   url: string
   language?: string
+  needsTranslation?: boolean // 非中文新闻需显示翻译按钮
+  translatedTitle?: string // 翻译后的标题
+  translatedSummary?: string // 翻译后的摘要
+  dateDiff?: number // 与目标日期的天数差距（0 = 完全匹配）
+}
+
+// 锚定新闻（用户手动选中的关联性强的新闻）
+export interface PinnedNews {
+  news: NewsItem
+  fundCode: string
+  fundName: string
+  date: string
+  nav: number
 }
 
 // 基金搜索结果（轻量）

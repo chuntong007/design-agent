@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react'
+import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { LineChart, PieChart, Newspaper, Anchor, Info, X, Sparkles, Wifi } from 'lucide-react'
 import type { Fund, Holding } from './types'
 import { fundApi } from './api'
@@ -13,6 +13,62 @@ import { clsx } from 'clsx'
 
 // 默认加载的示例基金（真实热门基金）
 const DEFAULT_CODES = ['161725', '005827', '110011']
+const STORAGE_KEY = 'fund-dashboard-selected-codes'
+const STORAGE_ACTIVE = 'fund-dashboard-active-code'
+
+// 从 localStorage 读取已保存的基金代码列表
+function loadSavedCodes(): string[] {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY)
+    if (saved) {
+      const codes = JSON.parse(saved)
+      if (Array.isArray(codes) && codes.length > 0) return codes
+    }
+  } catch {}
+  return DEFAULT_CODES
+}
+
+function loadSavedActiveCode(): string {
+  try {
+    return localStorage.getItem(STORAGE_ACTIVE) || ''
+  } catch {}
+  return ''
+}
+
+// 前端指标计算（根据切片后的净值序列重新计算）
+function computeMetricsFromNav(navSeries: { date: string; nav: number; growthRate: number }[], scale: string) {
+  if (!navSeries || navSeries.length === 0) {
+    return { latestNav: 0, latestGrowth: 0, totalReturn: 0, ytdReturn: 0, maxDrawdown: 0, sharpeRatio: 0, volatility: 0, scale: scale || '' }
+  }
+  const latest = navSeries[navSeries.length - 1]
+  const first = navSeries[0]
+  const totalReturn = +(((latest.nav / first.nav) - 1) * 100).toFixed(2)
+  const yearStart = new Date().getFullYear() + '-01-01'
+  const ytdStart = navSeries.find((p) => p.date >= yearStart) || first
+  const ytdReturn = +(((latest.nav / ytdStart.nav) - 1) * 100).toFixed(2)
+  let peak = navSeries[0].nav
+  let maxDD = 0
+  for (const p of navSeries) {
+    if (p.nav > peak) peak = p.nav
+    const dd = ((p.nav - peak) / peak) * 100
+    if (dd < maxDD) maxDD = dd
+  }
+  const returns = navSeries.slice(1).map((p) => p.growthRate || 0)
+  const mean = returns.reduce((a, b) => a + b, 0) / (returns.length || 1)
+  const variance = returns.reduce((a, b) => a + (b - mean) ** 2, 0) / (returns.length || 1)
+  const vol = +Math.sqrt(variance * 252).toFixed(2)
+  const sharpe = vol ? +((totalReturn - 2) / vol).toFixed(2) : 0
+  return {
+    latestNav: latest.nav,
+    latestGrowth: latest.growthRate,
+    totalReturn,
+    ytdReturn,
+    maxDrawdown: +maxDD.toFixed(2),
+    sharpeRatio: sharpe,
+    volatility: vol,
+    scale: scale || '',
+  }
+}
 
 const App: React.FC = () => {
   const [funds, setFunds] = useState<Fund[]>([])
@@ -22,6 +78,9 @@ const App: React.FC = () => {
   const [range, setRange] = useState<string>('1y')
   const [initialLoading, setInitialLoading] = useState(true)
   const [serverOnline, setServerOnline] = useState<boolean | null>(null)
+  // 保存初始基金代码列表（从 localStorage 或默认值）
+  const savedCodesRef = useRef<string[]>(loadSavedCodes())
+  const savedActiveRef = useRef<string>(loadSavedActiveCode())
 
   // 重仓股懒加载
   const [holdingsMap, setHoldingsMap] = useState<Record<string, Holding[]>>({})
@@ -42,34 +101,52 @@ const App: React.FC = () => {
       .catch(() => setServerOnline(false))
   }, [])
 
-  // 计算数据请求天数
-  const daysForRange = range === '1m' ? 30 : range === '3m' ? 90 : range === '6m' ? 180 : 365
-
-  // 加载单只基金
+  // 加载单只基金（始终请求成立来全部历史，前端按区间切片）
   const loadFund = useCallback(async (code: string, colorIndex: number) => {
     setLoadingCodes((prev) => [...prev, code])
     try {
-      const fund = await fundApi.getFund(code, 365, colorIndex)
-      setFunds((prev) => [...prev, fund])
-      // 若还没有 active 基金，设为当前
+      const fund = await fundApi.getFund(code, 'all', colorIndex)
+      setFunds((prev) => {
+        const filtered = prev.filter((f) => f.code !== code)
+        return [...filtered, fund]
+      })
       setActiveFundId((prev) => prev || fund.id)
+      return fund
     } catch (e) {
       console.error('加载基金失败:', code, e)
       alert(`基金 ${code} 加载失败，请检查代码是否正确`)
+      return null
     } finally {
       setLoadingCodes((prev) => prev.filter((c) => c !== code))
     }
   }, [])
 
-  // 初始加载默认基金
+  // 初始加载：从 localStorage 读取已保存的基金列表，若无则用默认值
   useEffect(() => {
     if (serverOnline === false) {
       setInitialLoading(false)
       return
     }
     if (serverOnline !== true) return
-    Promise.all(DEFAULT_CODES.map((c, i) => loadFund(c, i))).finally(() => setInitialLoading(false))
+    const codes = savedCodesRef.current
+    Promise.all(codes.map((c, i) => loadFund(c, i))).finally(() => setInitialLoading(false))
   }, [serverOnline])
+
+  // 持久化：当 funds 变化时保存 code 列表到 localStorage
+  useEffect(() => {
+    const codes = funds.map((f) => f.code)
+    if (codes.length > 0) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(codes))
+    }
+  }, [funds])
+
+  // 持久化：当 activeFundId 变化时保存
+  useEffect(() => {
+    if (activeFundId) {
+      const fund = funds.find((f) => f.id === activeFundId)
+      if (fund) localStorage.setItem(STORAGE_ACTIVE, fund.code)
+    }
+  }, [activeFundId, funds])
 
   // 添加基金（去重）
   const handleAdd = (code: string) => {
@@ -83,6 +160,11 @@ const App: React.FC = () => {
       const next = prev.filter((f) => f.id !== id)
       if (activeFundId === id) {
         setActiveFundId(next[0]?.id || '')
+      }
+      // 如果移除后没有基金了，清空 localStorage
+      if (next.length === 0) {
+        localStorage.removeItem(STORAGE_KEY)
+        localStorage.removeItem(STORAGE_ACTIVE)
       }
       return next
     })
@@ -118,14 +200,18 @@ const App: React.FC = () => {
     setNewsOpen(false)
   }
 
-  // 区间过滤（前端切片）
+  // 区间切换：纯前端切片（后端已返回成立来全部历史）+ 重新计算指标
   const filteredFunds = React.useMemo(() => {
+    if (range === 'all') return funds
+    const days = range === '1m' ? 30 : range === '3m' ? 90 : range === '6m' ? 180 : 365
+    const cutoff = new Date()
+    cutoff.setDate(cutoff.getDate() - days)
+    const cutoffStr = `${cutoff.getFullYear()}-${String(cutoff.getMonth() + 1).padStart(2, '0')}-${String(cutoff.getDate()).padStart(2, '0')}`
     return funds.map((f) => {
-      if (range === 'all') return f
-      const days = daysForRange
-      return { ...f, navSeries: f.navSeries.slice(-days) }
+      const sliced = f.navSeries.filter((p) => p.date >= cutoffStr)
+      return { ...f, navSeries: sliced, metrics: computeMetricsFromNav(sliced, f.metrics.scale) }
     })
-  }, [funds, range, daysForRange])
+  }, [funds, range])
 
   const selectedIds = funds.map((f) => f.id)
   // 给 NavChart 用的 newsDates：净值序列中所有日期都可点击检索
@@ -236,7 +322,7 @@ const App: React.FC = () => {
 
         {/* 基金选择卡片 */}
         <FundSelector
-          funds={funds}
+          funds={filteredFunds}
           loadingCodes={loadingCodes}
           onAdd={handleAdd}
           onRemove={handleRemove}
@@ -245,7 +331,7 @@ const App: React.FC = () => {
         />
 
         {/* 指标条 */}
-        <MetricsBar funds={funds} selectedIds={selectedIds} />
+        <MetricsBar funds={filteredFunds} selectedIds={selectedIds} />
 
         {/* 主体：左图表 + 重仓 / 右新闻面板（抽屉式） */}
         <div className={clsx('grid gap-5 transition-all duration-500', newsOpen ? 'lg:grid-cols-3' : 'lg:grid-cols-1')}>
@@ -269,6 +355,7 @@ const App: React.FC = () => {
                       { label: '3月', value: '3m' },
                       { label: '6月', value: '6m' },
                       { label: '1年', value: '1y' },
+                      { label: '成立来', value: 'all' },
                     ]}
                   />
                   <Segmented

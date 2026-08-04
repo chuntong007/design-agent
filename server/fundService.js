@@ -73,44 +73,85 @@ export async function getFundDetail(code) {
 }
 
 // ============ 历史净值序列 ============
-// 天天基金 lsjz 接口（pageSize 上限约 200，需分页）
+// 统一使用 pingzhongdata 接口获取完整历史，再按 days 参数切片
+// pingzhongdata 返回基金成立以来全部净值，lsjz 近期只返回 20 条不可用
 export async function getNavHistory(code, days = 365) {
-  const cacheKey = `nav:${code}:${days}`
-  const hit = cached(cacheKey, 60 * 60 * 1000)
-  if (hit) return hit
+  const isAll = days === 'all' || days === 'ALL'
+  const cacheKey = `nav:${code}:full` // 统一缓存完整历史
+  let fullList = cached(cacheKey, 24 * 60 * 60 * 1000) // 缓存 24 小时
+
+  if (!fullList) {
+    fullList = await getNavHistoryFromPingzhong(code)
+    if (fullList.length > 0) {
+      setCache(cacheKey, fullList, 24 * 60 * 60 * 1000)
+    } else {
+      // pingzhongdata 失败时降级到 lsjz
+      fullList = await getNavHistoryFromLsjz(code)
+    }
+  }
+
+  if (isAll || !fullList.length) return fullList
+
+  // 按 days 切片：取最近 days 天的数据
+  const daysNum = parseInt(days) || 365
+  const cutoff = new Date()
+  cutoff.setDate(cutoff.getDate() - daysNum)
+  const cutoffStr = `${cutoff.getFullYear()}-${String(cutoff.getMonth() + 1).padStart(2, '0')}-${String(cutoff.getDate()).padStart(2, '0')}`
+  return fullList.filter((p) => p.date >= cutoffStr)
+}
+
+// 通过 pingzhongdata 接口获取基金成立以来全部历史净值
+async function getNavHistoryFromPingzhong(code) {
+  try {
+    const url = `https://fund.eastmoney.com/pingzhongdata/${code}.js`
+    const text = await fetchJson(url, {
+      headers: { Referer: `https://fund.eastmoney.com/${code}.html` },
+    })
+    const m = text.match(/Data_netWorthTrend\s*=\s*(\[[\s\S]*?\])\s*;/)
+    if (!m) return []
+    const arr = JSON.parse(m[1])
+    const list = arr.map((d) => ({
+      date: formatDateFromTs(d.x),
+      nav: +Number(d.y).toFixed(4),
+      growthRate: d.equityReturn != null ? +Number(d.equityReturn).toFixed(2) : 0,
+    }))
+    list.sort((a, b) => (a.date < b.date ? -1 : 1))
+    return list
+  } catch (e) {
+    console.error('getNavHistoryFromPingzhong error:', e.message)
+    return []
+  }
+}
+
+// 降级方案：通过 lsjz 接口获取（近期只返回 20 条，仅作备用）
+async function getNavHistoryFromLsjz(code) {
   try {
     const end = new Date()
     const start = new Date()
-    start.setDate(start.getDate() - days)
+    start.setDate(start.getDate() - 365)
     const sd = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}`
     const ed = `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, '0')}-${String(end.getDate()).padStart(2, '0')}`
-
-    let allList = []
-    const pageSize = 200 // 天天基金上限
-    for (let page = 1; page <= 5; page++) {
-      const url = `https://api.fund.eastmoney.com/f10/lsjz?fundCode=${code}&pageIndex=${page}&pageSize=${pageSize}&startDate=${sd}&endDate=${ed}`
-      const text = await fetchJson(url, {
-        headers: { Referer: `https://fundf10.eastmoney.com/jjjz_${code}.html` },
-      })
-      const data = JSON.parse(text)
-      const list = (data?.Data?.LSJZList || []).map((d) => ({
-        date: d.FSRQ,
-        nav: parseFloat(d.DWJZ),
-        growthRate: d.JZZZL ? parseFloat(d.JZZZL) : 0,
-      }))
-      if (list.length === 0) break
-      allList = allList.concat(list)
-      // 不足一页说明已到末尾
-      if (list.length < pageSize) break
-    }
-    // 升序排列
-    allList.sort((a, b) => (a.date < b.date ? -1 : 1))
-    setCache(cacheKey, allList)
-    return allList
+    const url = `https://api.fund.eastmoney.com/f10/lsjz?fundCode=${code}&pageIndex=1&pageSize=200&startDate=${sd}&endDate=${ed}`
+    const text = await fetchJson(url, {
+      headers: { Referer: `https://fundf10.eastmoney.com/jjjz_${code}.html` },
+    })
+    const data = JSON.parse(text)
+    const list = (data?.Data?.LSJZList || []).map((d) => ({
+      date: d.FSRQ,
+      nav: parseFloat(d.DWJZ),
+      growthRate: d.JZZZL ? parseFloat(d.JZZZL) : 0,
+    }))
+    list.sort((a, b) => (a.date < b.date ? -1 : 1))
+    return list
   } catch (e) {
-    console.error('getNavHistory error:', e.message)
+    console.error('getNavHistoryFromLsjz error:', e.message)
     return []
   }
+}
+
+function formatDateFromTs(ts) {
+  const d = new Date(ts)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
 // ============ 重仓股票 ============

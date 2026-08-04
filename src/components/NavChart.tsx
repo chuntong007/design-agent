@@ -1,7 +1,6 @@
 import React, { useMemo, useRef, useEffect } from 'react'
 import ReactECharts from 'echarts-for-react'
 import type { Fund } from '../types'
-import { getNewsDates, searchNewsByDate } from '../data/fundData'
 
 interface Props {
   funds: Fund[]
@@ -75,10 +74,7 @@ export const NavChart: React.FC<Props> = ({ funds, selectedIds, normalized, anch
               </div>`
             })
             .join('')
-          const hasNews = newsDates.includes(date)
-          const newsHint = hasNews
-            ? `<div style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,0.15);color:#fbbf24;font-size:11px">📰 此日期附近有新闻，点击曲线查看</div>`
-            : ''
+          const newsHint = `<div style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,0.15);color:#fbbf24;font-size:11px">📰 点击此处检索该日期全球新闻</div>`
           return `<div style="font-weight:600;margin-bottom:2px">${date}</div>${rows}${newsHint}`
         },
       },
@@ -128,31 +124,14 @@ export const NavChart: React.FC<Props> = ({ funds, selectedIds, normalized, anch
           ]
         : [],
     }
-  }, [selectedFunds, normalized, dates, anchorDate, newsDates])
+  }, [selectedFunds, normalized, dates, anchorDate])
 
-  // 标记新闻日期 + 锚定线
-  const markNewsAndAnchor = useMemo(() => {
-    return null // 用 markLine 在 series 上更稳，下面用 series.markLine 实现
-  }, [])
-
-  // 重新构建带 markLine 的 option
+  // 重新构建带锚定线的 option（移除逐日新闻 markLine，避免数据量大时卡死）
   const fullOption = useMemo(() => {
     const opt = { ...option }
     const markLines: any[] = []
 
-    // 新闻日期标记线（浅色）
-    newsDates.forEach((d) => {
-      if (dates.includes(d)) {
-        markLines.push({
-          xAxis: d,
-          symbol: 'none',
-          label: { show: false },
-          lineStyle: { color: '#fbbf24', type: 'dashed', width: 1, opacity: 0.45 },
-        })
-      }
-    })
-
-    // 锚定线（高亮）
+    // 仅锚定线（高亮）
     if (anchorDate && dates.includes(anchorDate)) {
       markLines.push({
         xAxis: anchorDate,
@@ -173,13 +152,10 @@ export const NavChart: React.FC<Props> = ({ funds, selectedIds, normalized, anch
     }
 
     if (markLines.length && opt.series) {
-      opt.series = opt.series.map((s: any, i: number) => ({
-        ...s,
-        markLine: i === 0 ? { silent: true, symbol: 'none', data: markLines } : undefined,
-      }))
+      opt.series = opt.series.map((s: any, i: number) => (i === 0 ? { ...s, markLine: { silent: true, symbol: 'none', data: markLines } } : s))
     }
     return opt
-  }, [option, newsDates, anchorDate, dates])
+  }, [option, anchorDate, dates])
 
   const onChartReady = (instance: any) => {
     if (!instance) return

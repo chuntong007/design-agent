@@ -36,7 +36,9 @@ app.get('/api/funds/search', async (req, res) => {
 app.get('/api/funds/:code', async (req, res) => {
   try {
     const { code } = req.params
-    const days = parseInt(req.query.days) || 365
+    const daysParam = String(req.query.days || '365')
+    // 支持 days=all（成立来全部历史）
+    const days = daysParam === 'all' || daysParam === 'ALL' ? 'all' : (parseInt(daysParam) || 365)
     const [detail, navSeries] = await Promise.all([getFundDetail(code), getNavHistory(code, days)])
     const metrics = computeMetrics(navSeries)
     res.json(

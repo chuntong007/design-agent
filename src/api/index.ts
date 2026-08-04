@@ -29,8 +29,8 @@ export const fundApi = {
   search: (keyword: string) =>
     request<FundSearchResult[]>(`${BASE}/funds/search?keyword=${encodeURIComponent(keyword)}`),
 
-  // 获取基金完整数据（详情 + 历史净值 + 指标）
-  getFund: async (code: string, days = 365, colorIndex = 0): Promise<Fund> => {
+  // 获取基金完整数据（详情 + 历史净值 + 指标），days 可为数字或 'all'（成立来）
+  getFund: async (code: string, days: number | 'all' = 365, colorIndex = 0): Promise<Fund> => {
     const data = await request<{
       code: string
       name: string

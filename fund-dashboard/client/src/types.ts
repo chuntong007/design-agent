@@ -1,0 +1,149 @@
+// 共享类型：与后端 API 响应对齐
+export interface FundSearchResult {
+  code: string
+  name: string
+  type: string
+  pinyin: string
+}
+
+export interface NetWorthPoint {
+  date: string
+  timestamp: number
+  nav: number
+  returnRate: number
+}
+
+export interface FundDetail {
+  code: string
+  name: string
+  manager: string
+  establishmentDate: string
+  netWorth: NetWorthPoint[]
+}
+
+export interface HoldingStock {
+  stockCode: string
+  stockName: string
+  marketCode: string
+  ratio: number
+}
+
+export interface FundHoldings {
+  reportDate: string
+  stocks: HoldingStock[]
+}
+
+export interface StockQuote {
+  code: string
+  name: string
+  price: number
+  prevClose: number
+  changePercent: number
+  marketCap: number
+  pe: number
+}
+
+export interface StockKlinePoint {
+  date: string
+  close: number
+}
+
+export interface NewsArticle {
+  title: string
+  url: string
+  date: string
+  domain: string
+  sourceCountry: string
+  language: string
+  impact: 'positive' | 'negative' | 'neutral'
+  category: string
+  source: 'gdelt' | 'wikipedia' | 'sina'
+}
+
+export interface ApiResult<T> {
+  ok: boolean
+  data?: T
+  error?: string
+}
+
+// ===== 回测相关类型 =====
+export interface Trade {
+  date: string
+  type: 'buy' | 'sell'
+  nav: number
+  shares: number
+  amount: number
+  reason: string
+}
+
+export interface BacktestMetrics {
+  totalReturn: number
+  annualReturn: number
+  maxDrawdown: number
+  sharpe: number
+  winRate: number
+  tradeCount: number
+  finalValue: number
+  benchmarkReturn: number
+}
+
+export interface EquityPoint {
+  date: string
+  timestamp: number
+  value: number
+  benchmark: number
+}
+
+export interface BacktestResult {
+  ok: boolean
+  equityCurve: EquityPoint[]
+  trades: Trade[]
+  metrics: BacktestMetrics
+  error?: string
+}
+
+export type BacktestStrategy = 'dca' | 'ma_cross' | 'momentum' | 'stop_profit_loss' | 'grid_trading' | 'dual_momentum' | 'mean_reversion' | 'trend_following' | 'kelly' | 'rsi'
+
+export interface StrategyParam {
+  name: string
+  label: string
+  default: number
+  min: number
+  max: number
+  desc: string
+}
+
+export interface StrategyInfo {
+  key: string
+  name: string
+  category: string
+  description: string
+  details: string[]
+  suitableMarket: string
+  riskLevel: '低' | '中' | '高'
+  params: StrategyParam[]
+}
+
+export interface BacktestParams {
+  fundCode: string
+  strategy: BacktestStrategy
+  startDate: string
+  endDate: string
+  initialCapital: number
+  dca?: { amount: number; freqDays: number }
+  maCross?: { shortDays: number; longDays: number }
+  momentum?: { lookbackDays: number; holdingDays: number }
+  stopProfitLoss?: { stopProfit: number; stopLoss: number; buyAmount: number }
+  gridTrading?: { gridCount: number; lowerPrice: number; upperPrice: number }
+  dualMomentum?: { lookbackDays: number; benchmarkCode?: string }
+  meanReversion?: { maDays: number; threshold: number }
+  trendFollowing?: { shortDays: number; longDays: number; atrDays: number }
+  kelly?: { lookbackDays: number; kellyFraction: number }
+  rsi?: { rsiDays: number; oversold: number; overbought: number }
+}
+
+// 新闻检索返回的领域信息
+export interface SectorInfo {
+  sectors: string[]
+  description: string
+}

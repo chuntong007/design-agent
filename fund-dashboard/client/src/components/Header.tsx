@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { SegmentedControl, Box } from '@mantine/core'
+import { Box } from '@mantine/core'
 import type { LoadedFund, MainTab } from '../App'
 import { api } from '../api'
 import type { FundSearchResult } from '../types'
@@ -104,22 +104,33 @@ export function Header({ funds, onAdd, range, onRangeChange, normalized, onNorma
         <span style={{ fontWeight: 600, fontSize: '15px', color: p.text0 }}>基金多维分析看板</span>
       </div>
 
-      {/* 主 tab 切换：分析看板 / 策略回测 - Mantine SegmentedControl */}
-      <SegmentedControl
-        value={mainTab}
-        onChange={(v) => onMainTabChange(v as MainTab)}
-        data={[
-          { label: '📊 分析看板', value: 'analysis' },
-          { label: '⚙️ 策略回测', value: 'backtest' },
-        ]}
-        size="xs"
-        radius="md"
-        styles={{
-          root: { background: p.bg2, border: `1px solid ${p.border}`, flexShrink: 0 },
-          indicator: { background: p.accent, boxShadow: `0 2px 8px ${p.accent}55` },
-          label: { fontSize: '12px', fontWeight: 500, padding: '4px 10px' },
-        }}
-      />
+      {/* 主 tab 切换：分析看板 / 策略回测 - 与区间切换一致的原生按钮组，确保激活态文字反相 */}
+      <Box style={{ display: 'flex', gap: '1px', background: p.bg2, borderRadius: '6px', padding: '2px', border: `1px solid ${p.border}`, flexShrink: 0 }}>
+        {([
+          { value: 'analysis', label: '📊 分析看板' },
+          { value: 'backtest', label: '⚙️ 策略回测' },
+        ] as const).map((t) => (
+          <button
+            key={t.value}
+            onClick={() => onMainTabChange(t.value)}
+            style={{
+              background: mainTab === t.value ? p.accent : 'transparent',
+              color: mainTab === t.value ? '#fff' : p.text1,
+              border: 'none',
+              borderRadius: '4px',
+              padding: '5px 12px',
+              fontSize: '12px',
+              cursor: 'pointer',
+              fontWeight: 500,
+              whiteSpace: 'nowrap',
+              transition: 'background-color 0.15s ease, color 0.15s ease',
+              boxShadow: mainTab === t.value ? `0 2px 8px ${p.accent}55` : 'none',
+            }}
+          >
+            {t.label}
+          </button>
+        ))}
+      </Box>
 
       {/* 搜索 */}
       <div ref={searchRef} style={{ position: 'relative', width: '200px', flexShrink: 0 }}>

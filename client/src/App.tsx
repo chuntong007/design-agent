@@ -1,6 +1,6 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import type { FundDetail, NewsArticle, SectorInfo } from './types'
-import { api } from './api'
+import { api, searchNewsStream } from './api'
 import { storage, type PinnedFund, type AnchorNews } from './storage'
 import { seriesColor, makeStyles } from './theme'
 import { useTheme } from './ThemeContext'
@@ -35,8 +35,11 @@ export function App() {
   const [newsQuery, setNewsQuery] = useState<{ date: string; fundCode: string } | null>(null)
   const [newsArticles, setNewsArticles] = useState<NewsArticle[]>([])
   const [newsSector, setNewsSector] = useState<SectorInfo | null>(null)
+  const [newsMarketContext, setNewsMarketContext] = useState<string | undefined>(undefined)
   const [newsLoading, setNewsLoading] = useState(false)
   const [newsError, setNewsError] = useState('')
+  const [newsStatus, setNewsStatus] = useState<{ stage: string; message: string } | null>(null)
+  const newsAbortRef = useRef<AbortController | null>(null)
 
   // 初始化：加载基金列表
   useEffect(() => {
@@ -122,22 +125,55 @@ export function App() {
     setSelectedCode((cur) => (cur === code ? '' : cur))
   }, [p])
 
-  // 点击净值曲线 -> 检索新闻（带入基金领域关键词）
+  // 点击净值曲线 -> 流式检索新闻（SSE 增量推送）
   const onPointClick = useCallback(
     (date: string, fundCode: string) => {
+      // 取消上一次未完成的请求
+      if (newsAbortRef.current) {
+        newsAbortRef.current.abort()
+      }
+
       setNewsQuery({ date, fundCode })
       setNewsError('')
       setNewsArticles([])
       setNewsSector(null)
+      setNewsMarketContext(undefined)
+      setNewsStatus({ stage: 'init', message: '正在启动检索...' })
       setNewsLoading(true)
-      api
-        .searchNews(date, fundCode)
-        .then(({ articles, sector }) => {
-          setNewsArticles(articles)
-          setNewsSector(sector)
-        })
-        .catch((err) => setNewsError((err as Error).message))
-        .finally(() => setNewsLoading(false))
+
+      const controller = searchNewsStream(date, fundCode, (evt) => {
+        switch (evt.event) {
+          case 'sector':
+            setNewsSector(evt.data)
+            break
+          case 'status':
+            setNewsStatus({ stage: evt.data.stage, message: evt.data.message })
+            break
+          case 'sources':
+            // 搜索来源 URL，可选存储
+            break
+          case 'article':
+            // 增量追加文章
+            setNewsArticles((prev) => [...prev, evt.data.article])
+            break
+          case 'market_context':
+            setNewsMarketContext(evt.data.text)
+            break
+          case 'complete':
+            // 用完整数据覆盖（防止增量解析遗漏）
+            setNewsArticles(evt.data.articles)
+            setNewsMarketContext(evt.data.market_context)
+            break
+          case 'error':
+            setNewsError(evt.data.message)
+            break
+          case 'done':
+            setNewsLoading(false)
+            setNewsStatus(null)
+            break
+        }
+      })
+      newsAbortRef.current = controller
     },
     []
   )
@@ -157,6 +193,8 @@ export function App() {
         category: article.category,
         impact: article.impact,
         pinnedAt: Date.now(),
+        summary: article.summary,
+        impact_reason: article.impact_reason,
       }
       setAnchors((prev) => {
         // 同一日期同一 URL 去重
@@ -230,7 +268,9 @@ export function App() {
                 query={newsQuery}
                 articles={newsArticles}
                 sector={newsSector}
+                market_context={newsMarketContext}
                 loading={newsLoading}
+                status={newsStatus}
                 error={newsError}
                 anchors={anchors}
                 onAnchor={anchorNews}

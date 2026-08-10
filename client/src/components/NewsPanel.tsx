@@ -10,7 +10,9 @@ interface Props {
   query: { date: string; fundCode: string } | null
   articles: NewsArticle[]
   sector: SectorInfo | null
+  market_context?: string
   loading: boolean
+  status: { stage: string; message: string } | null
   error: string
   anchors: AnchorNews[]
   onAnchor: (article: NewsArticle) => void
@@ -18,7 +20,7 @@ interface Props {
   funds: LoadedFund[]
 }
 
-export function NewsPanel({ query, articles, sector, loading, error, anchors, onAnchor, onRemoveAnchor, funds }: Props) {
+export function NewsPanel({ query, articles, sector, market_context, loading, status, error, anchors, onAnchor, onRemoveAnchor, funds }: Props) {
   const { palette: p } = useTheme()
   const styles = makeStyles(p)
   const [tab, setTab] = useState<'current' | 'anchored'>('current')
@@ -78,7 +80,9 @@ export function NewsPanel({ query, articles, sector, loading, error, anchors, on
           <CurrentView
             query={query}
             articles={articles}
+            market_context={market_context}
             loading={loading}
+            status={status}
             error={error}
             anchors={anchors}
             onAnchor={onAnchor}
@@ -108,14 +112,18 @@ function tabBtnStyle(p: Palette, active: boolean): React.CSSProperties {
 function CurrentView({
   query,
   articles,
+  market_context,
   loading,
+  status,
   error,
   anchors,
   onAnchor,
 }: {
   query: { date: string; fundCode: string } | null
   articles: NewsArticle[]
+  market_context?: string
   loading: boolean
+  status: { stage: string; message: string } | null
   error: string
   anchors: AnchorNews[]
   onAnchor: (a: NewsArticle) => void
@@ -130,24 +138,123 @@ function CurrentView({
       </div>
     )
   }
-  if (loading) {
-    return <div style={{ padding: '20px', textAlign: 'center', color: p.text2, fontSize: '12px' }}>正在检索全球新闻（GDELT 优先，国内源降级）...</div>
+  // 流式加载中且尚无文章：显示进度状态
+  if (loading && articles.length === 0) {
+    return (
+      <div style={{ padding: '20px', textAlign: 'center' }}>
+        {status ? (
+          <>
+            <div style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '8px',
+              fontSize: '12px',
+              color: p.accent,
+              marginBottom: '8px',
+            }}>
+              <span style={{
+                display: 'inline-block',
+                width: '10px',
+                height: '10px',
+                borderRadius: '50%',
+                border: `2px solid ${p.accent}`,
+                borderTopColor: 'transparent',
+                animation: 'news-spin 0.8s linear infinite',
+              }} />
+              {status.message}
+            </div>
+            <StageIndicator stage={status.stage} palette={p} />
+          </>
+        ) : (
+          <div style={{ fontSize: '12px', color: p.text2 }}>正在检索全球新闻...</div>
+        )}
+        <style>{`@keyframes news-spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    )
   }
-  if (error) {
+  // 加载完成但有错误且无文章
+  if (error && articles.length === 0) {
     return <div style={{ padding: '20px', textAlign: 'center', color: p.impactNegative, fontSize: '12px' }}>检索失败：{error}</div>
   }
-  if (articles.length === 0) {
+  // 流式加载中但已有文章：显示已收到的文章 + 底部加载条
+  if (articles.length === 0 && !loading) {
     return <div style={{ padding: '20px', textAlign: 'center', color: p.text2, fontSize: '12px' }}>该时期暂无新闻数据</div>
   }
 
   return (
     <div style={{ padding: '6px' }}>
+      {market_context && (
+        <div
+          style={{
+            padding: '8px 10px',
+            margin: '4px 0 8px',
+            borderRadius: '6px',
+            background: p.accentSoft,
+            border: `1px solid ${p.accentDim}`,
+          }}
+        >
+          <div style={{ fontSize: '10px', color: p.accent, fontWeight: 600, marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            AI 市场概述
+          </div>
+          <div style={{ fontSize: '11px', lineHeight: 1.5, color: p.text1 }}>{market_context}</div>
+        </div>
+      )}
       {articles.map((a, i) => (
         <NewsCard
           key={i}
           article={a}
           isAnchored={anchors.some((x) => x.date === query.date && x.url === a.url)}
           onAnchor={() => onAnchor(a)}
+        />
+      ))}
+      {/* 流式加载中：底部持续显示进度 */}
+      {loading && articles.length > 0 && status && (
+        <div style={{
+          padding: '10px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          fontSize: '11px',
+          color: p.accent,
+        }}>
+          <span style={{
+            display: 'inline-block',
+            width: '8px',
+            height: '8px',
+            borderRadius: '50%',
+            border: `2px solid ${p.accent}`,
+            borderTopColor: 'transparent',
+            animation: 'news-spin 0.8s linear infinite',
+          }} />
+          {status.message} · 已收到 {articles.length} 条
+        </div>
+      )}
+      <style>{`@keyframes news-spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  )
+}
+
+// 阶段指示器：搜索中 -> 分析中 -> 完成
+function StageIndicator({ stage, palette: p }: { stage: string; palette: Palette }) {
+  const stages = [
+    { key: 'searching', label: '搜索' },
+    { key: 'analyzing', label: '分析' },
+    { key: 'done', label: '完成' },
+  ]
+  const activeIdx = stages.findIndex((s) => s.key === stage)
+  if (activeIdx === -1) return null
+  return (
+    <div style={{ display: 'flex', justifyContent: 'center', gap: '4px', marginTop: '6px' }}>
+      {stages.map((s, i) => (
+        <div
+          key={s.key}
+          style={{
+            width: '28px',
+            height: '3px',
+            borderRadius: '2px',
+            background: i <= activeIdx ? p.accent : p.border,
+            transition: 'background 0.3s',
+          }}
         />
       ))}
     </div>
@@ -194,7 +301,11 @@ function NewsCard({
 
   const impactColor =
     article.impact === 'positive' ? p.impactPositive : article.impact === 'negative' ? p.impactNegative : p.impactNeutral
-  const sourceLabel = article.source === 'gdelt' ? 'GDELT' : article.source === 'wikipedia' ? 'Wikipedia' : '新浪'
+  const sourceLabel =
+    article.source === 'gdelt' ? 'GDELT' :
+    article.source === 'wikipedia' ? 'Wikipedia' :
+    article.source === 'llm' ? 'AI 分析' : '新浪'
+  const hasLLMFields = article.source === 'llm' || !!(article.summary || article.impact_reason || article.relevance !== undefined || article.affected_sectors)
 
   return (
     <div
@@ -220,6 +331,35 @@ function NewsCard({
       <div style={{ fontSize: '12px', lineHeight: 1.5, color: p.text0, marginBottom: '6px' }}>
         {showOriginal ? article.title : translated || article.title}
       </div>
+      {/* LLM 归因字段 */}
+      {hasLLMFields && (
+        <div style={{ marginBottom: '6px' }}>
+          {article.summary && (
+            <div style={{ fontSize: '11px', lineHeight: 1.5, color: p.text2, fontStyle: 'italic', marginBottom: '4px' }}>
+              {article.summary}
+            </div>
+          )}
+          {article.impact_reason && (
+            <div style={{ fontSize: '11px', lineHeight: 1.4, color: p.text2, marginBottom: '4px' }}>
+              <span style={{ color: impactColor, fontWeight: 500 }}>影响推理：</span>
+              {article.impact_reason}
+            </div>
+          )}
+          {article.relevance !== undefined && article.relevance !== null && (
+            <RelevanceBar value={article.relevance} palette={p} />
+          )}
+          {article.affected_sectors && article.affected_sectors.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '4px', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '10px', color: p.text2 }}>影响领域：</span>
+              {article.affected_sectors.map((s, si) => (
+                <span key={si} style={{ fontSize: '10px', padding: '1px 6px', borderRadius: '3px', background: p.accentDim, color: p.accent }}>
+                  {s}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
         {article.url ? (
           <a href={article.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: '11px', color: p.text2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
@@ -330,6 +470,17 @@ function AnchoredView({
             <div style={{ fontSize: '12px', lineHeight: 1.4, color: p.text1, marginBottom: '6px' }}>
               {a.title}
             </div>
+            {a.summary && (
+              <div style={{ fontSize: '11px', lineHeight: 1.4, color: p.text2, fontStyle: 'italic', marginBottom: '4px' }}>
+                {a.summary}
+              </div>
+            )}
+            {a.impact_reason && (
+              <div style={{ fontSize: '11px', lineHeight: 1.4, color: p.text2, marginBottom: '6px' }}>
+                <span style={{ color: impactColor, fontWeight: 500 }}>影响推理：</span>
+                {a.impact_reason}
+              </div>
+            )}
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
               <span style={{ ...badgeStyle, background: `${impactColor}22`, color: impactColor }}>
                 {a.impact === 'positive' ? '利好' : a.impact === 'negative' ? '利空' : '中性'}
@@ -367,4 +518,21 @@ function miniBtnStyle(p: Palette): React.CSSProperties {
     cursor: 'pointer',
     fontWeight: 500,
   }
+}
+
+// 相关度评分条:0-100%,颜色随分值变化(低=灰,中=蓝,高=绿)
+function RelevanceBar({ value, palette: p }: { value: number; palette: Palette }) {
+  const pct = Math.max(0, Math.min(1, value)) * 100
+  const color = pct >= 70 ? p.impactPositive : pct >= 40 ? p.accent : p.text2
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
+      <span style={{ fontSize: '10px', color: p.text2, minWidth: '42px' }}>相关度</span>
+      <div style={{ flex: 1, maxWidth: '120px', height: '4px', borderRadius: '2px', background: p.bg3, overflow: 'hidden' }}>
+        <div style={{ width: `${pct}%`, height: '100%', borderRadius: '2px', background: color, transition: 'width 0.3s ease' }} />
+      </div>
+      <span style={{ fontSize: '10px', color, fontFamily: '"JetBrains Mono", monospace', fontWeight: 600, minWidth: '32px' }}>
+        {pct.toFixed(0)}%
+      </span>
+    </div>
+  )
 }

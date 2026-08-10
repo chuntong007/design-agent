@@ -57,7 +57,12 @@ export interface NewsArticle {
   language: string
   impact: 'positive' | 'negative' | 'neutral'
   category: string
-  source: 'gdelt' | 'wikipedia' | 'sina'
+  source: 'gdelt' | 'wikipedia' | 'sina' | 'llm'
+  // LLM 归因字段(可选,LLM 分析时填充)
+  summary?: string
+  impact_reason?: string
+  relevance?: number
+  affected_sectors?: string[]
 }
 
 export interface ApiResult<T> {

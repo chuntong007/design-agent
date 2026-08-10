@@ -8,6 +8,14 @@ export const config = {
   proxyUrl: process.env.PROXY_URL || 'socks5h://127.0.0.1:1080',
   // 默认请求超时（ms）
   timeout: 30000,
+  // LLM 配置：标准 OpenAI Responses API 协议（CC-Switch 透明转发到 DeepSeek 等）
+  // 不走代理：LLM 服务国内直连或经 CC-Switch 本地转发
+  llm: {
+    baseUrl: process.env.LLM_BASE_URL || 'https://api.deepseek.com',
+    apiKey: process.env.LLM_API_KEY || '',
+    model: process.env.LLM_MODEL || 'deepseek-v4-flash',
+    timeout: Number(process.env.LLM_TIMEOUT) || 60000,
+  },
 }
 
 // 需要走代理的境外域名

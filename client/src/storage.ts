@@ -20,6 +20,9 @@ export interface AnchorNews {
   category: string
   impact: string
   pinnedAt: number
+  // LLM 归因字段(可选,锚定时从 NewsArticle 复制)
+  summary?: string
+  impact_reason?: string
 }
 
 export interface ViewState {

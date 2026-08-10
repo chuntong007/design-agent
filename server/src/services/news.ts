@@ -1,12 +1,12 @@
-// 全球新闻检索：GDELT 优先（走代理）+ 国内源降级
-// GDELT 限流极严（连续 2-3 次 429，恢复需 1-5 分钟），必须串行化 + 缓存 + 降级
-//
-// 数据源优先级：
-// 1. GDELT ArtList（全球新闻，含中文媒体）
-// 2. Wikipedia "On This Day"（历史事件，国内可达）
-// 3. 新浪财经滚动新闻（国内可达，仅近期）
+// 全球新闻检索：LLM(web_search) 优先 + GDELT 降级链
+// LLM 路径调用标准 Responses API，内置 web_search 工具检索真实新闻并归因分析
+// LLM 失败时降级到：
+//   1. GDELT ArtList（全球新闻，含中文媒体，走代理）
+//   2. Wikipedia "On This Day"（历史事件，国内可达）
+//   3. 新浪财经滚动新闻（国内可达，仅近期）
 import { httpGet } from '../utils/http'
 import { cacheGet, cacheSet, sleep } from '../utils/cache'
+import { searchNewsByLLM } from './news-llm'
 
 export interface NewsArticle {
   title: string
@@ -15,11 +15,21 @@ export interface NewsArticle {
   domain: string
   sourceCountry: string
   language: string
-  // 影响判断（基于关键词的简易分类）
+  // 影响判断（基于关键词的简易分类 / LLM 归因分析）
   impact: 'positive' | 'negative' | 'neutral'
   // 分类
   category: string
-  source: 'gdelt' | 'wikipedia' | 'sina'
+  source: 'gdelt' | 'wikipedia' | 'sina' | 'llm'
+  // ===== LLM 归因分析附加字段（GDELT 降级链不填充）=====
+  summary?: string
+  impact_reason?: string
+  relevance?: number
+  affected_sectors?: string[]
+}
+
+export interface NewsSearchResult {
+  articles: NewsArticle[]
+  market_context?: string
 }
 
 // ===== 全局串行锁（GDELT 限流刚需）=====
@@ -36,38 +46,61 @@ function withNewsLock<T>(task: () => Promise<T>): Promise<T> {
 
 // ===== 主入口：检索某日期 ±7 天的全球新闻 =====
 // sectors: 基金领域关键词（用于精准检索，可选）
-export async function searchNews(centerDate: string, sectors: string[] = []): Promise<NewsArticle[]> {
+// 优先调用 LLM(web_search) 归因分析；失败降级到 GDELT 串行链
+export async function searchNews(
+  centerDate: string,
+  sectors: string[] = []
+): Promise<NewsSearchResult> {
   const cacheKey = `news:${centerDate}:${sectors.join(',')}`
-  const cached = cacheGet<NewsArticle[]>(cacheKey)
+  const cached = cacheGet<NewsSearchResult>(cacheKey)
   if (cached) return cached
 
-  const result = await withNewsLock(async () => {
-    // 1) 尝试 GDELT（走代理，带入领域词）
+  // 1) 优先：LLM + web_search 归因分析
+  try {
+    const llmResult = await searchNewsByLLM(centerDate, sectors)
+    if (llmResult.articles.length > 0) {
+      const result: NewsSearchResult = {
+        articles: llmResult.articles,
+        market_context: llmResult.market_context,
+      }
+      cacheSet(cacheKey, result, 30 * 60 * 1000)
+      return result
+    }
+  } catch (err) {
+    console.warn(
+      `[news] LLM search failed for ${centerDate}, falling back to GDELT chain:`,
+      (err as Error).message
+    )
+  }
+
+  // 2) 降级：GDELT 串行链（含 Wikipedia / Sina 进一步降级）
+  const articles = await withNewsLock(async () => {
+    // 2.1) 尝试 GDELT（走代理，带入领域词）
     try {
-      const articles = await searchByGdelt(centerDate, sectors)
-      if (articles.length > 0) {
-        cacheSet(cacheKey, articles, 30 * 60 * 1000) // 30 分钟
-        return articles
+      const gdeltArticles = await searchByGdelt(centerDate, sectors)
+      if (gdeltArticles.length > 0) {
+        cacheSet(cacheKey, { articles: gdeltArticles }, 30 * 60 * 1000) // 30 分钟
+        return gdeltArticles
       }
     } catch (err) {
       console.warn(`[news] GDELT failed for ${centerDate}:`, (err as Error).message)
     }
-    // 2) 降级到 Wikipedia 历史事件
+    // 2.2) 降级到 Wikipedia 历史事件
     try {
-      const articles = await searchByWikipedia(centerDate)
-      if (articles.length > 0) {
-        cacheSet(cacheKey, articles, 30 * 60 * 1000)
-        return articles
+      const wikiArticles = await searchByWikipedia(centerDate)
+      if (wikiArticles.length > 0) {
+        cacheSet(cacheKey, { articles: wikiArticles }, 30 * 60 * 1000)
+        return wikiArticles
       }
     } catch (err) {
       console.warn(`[news] Wikipedia failed for ${centerDate}:`, (err as Error).message)
     }
-    // 3) 最终降级到新浪财经滚动新闻（仅近期有效）
+    // 2.3) 最终降级到新浪财经滚动新闻（仅近期有效）
     try {
-      const articles = await searchBySina()
-      if (articles.length > 0) {
-        cacheSet(cacheKey, articles, 15 * 60 * 1000)
-        return articles
+      const sinaArticles = await searchBySina()
+      if (sinaArticles.length > 0) {
+        cacheSet(cacheKey, { articles: sinaArticles }, 15 * 60 * 1000)
+        return sinaArticles
       }
     } catch (err) {
       console.warn(`[news] Sina failed:`, (err as Error).message)
@@ -75,7 +108,7 @@ export async function searchNews(centerDate: string, sectors: string[] = []): Pr
     return []
   })
 
-  return result
+  return { articles }
 }
 
 // ===== GDELT =====

@@ -23,6 +23,22 @@ interface QueryPoint {
   idx: number
 }
 
+// Recharts 点击事件状态
+interface ClickEventState {
+  activeLabel?: string | number
+  activePayload?: TooltipPayload[]
+  activeCoordinate?: { x: number; y: number }
+}
+
+// Recharts Tooltip/Payload 数据项
+interface TooltipPayload {
+  dataKey: string | number
+  value: number
+  color: string
+  name?: string
+  payload?: Record<string, unknown>
+}
+
 interface Props {
   funds: LoadedFund[]
   range: string
@@ -98,12 +114,19 @@ export function NavChartPanel({
     return <EmptyState message="暂无净值数据" />
   }
 
-  // 点击图表：找最近的数据点
-  const handleClick = (state: any) => {
+  // 点击图表:优先从 activePayload 获取点击的基金 dataKey,否则 fallback 到 funds[0]
+  const handleClick = (state: ClickEventState) => {
     if (!state || !state.activeLabel) return
     const date = state.activeLabel as string
-    // 默认锚定到第一只基金
-    const fundCode = funds[0]?.code || ''
+    let fundCode = ''
+    // 从 activePayload 找到点击的数据系列(dataKey 即基金 code)
+    if (state.activePayload && state.activePayload.length > 0) {
+      fundCode = state.activePayload[0].dataKey as string
+    }
+    // fallback:无法确定时用 funds[0]
+    if (!fundCode || !funds.some((f) => f.code === fundCode)) {
+      fundCode = funds[0]?.code || ''
+    }
     if (fundCode) onPointClick(date, fundCode)
   }
 
@@ -189,7 +212,7 @@ export function NavChartPanel({
                 />
               ))}
             {/* 用 Customized 安全渲染锚点标注：只有 xAxis/yAxis scale 就绪时才渲染 */}
-            <Customized component={(props: any) => <AnchorMarks {...props} funds={funds} aligned={aligned} anchors={anchors} queryPoint={queryPoint} palette={p} />} />
+            <Customized component={(props: CustomizedProps) => <AnchorMarks {...props} funds={funds} aligned={aligned} anchors={anchors} queryPoint={queryPoint} palette={p} />} />
           </ComposedChart>
         </ResponsiveContainer>
         </ErrorBoundary>
@@ -231,7 +254,7 @@ export function NavChartPanel({
 
 interface TooltipProps {
   active?: boolean
-  payload?: any[]
+  payload?: TooltipPayload[]
   label?: string
   funds: LoadedFund[]
   normalized: boolean
@@ -301,9 +324,15 @@ function pad(n: number): string {
 
 // 锚点标注组件：用 Customized 的 component prop 渲染，安全访问 xAxis/yAxis scale
 // 只有 scale 就绪时才渲染 SVG 标注，避免 ReferenceDot 的 scale undefined 崩溃
-interface AnchorMarksProps {
-  xAxisMap?: any
-  yAxisMap?: any
+// CustomizedProps:Recharts Customized 组件注入的坐标轴映射,这里用 Record + 具体轴类型
+interface AxisConfig {
+  scale?: { (value: string | number): number; range?: () => [number, number] }
+}
+interface CustomizedProps {
+  xAxisMap?: Record<number, AxisConfig>
+  yAxisMap?: Record<number, AxisConfig>
+}
+interface AnchorMarksProps extends CustomizedProps {
   funds: LoadedFund[]
   aligned: AlignedSeries
   anchors: AnchorNews[]
@@ -313,6 +342,8 @@ interface AnchorMarksProps {
 
 function AnchorMarks(props: AnchorMarksProps) {
   const { xAxisMap, yAxisMap, funds, aligned, anchors, queryPoint, palette: p } = props
+  // funds 保留在 props 中以便未来扩展(如按基金颜色区分锚点)
+  void funds
   if (!xAxisMap || !yAxisMap) return null
   const xAxis = xAxisMap[0]
   const yAxis = yAxisMap[0]
@@ -353,12 +384,16 @@ function AnchorMarks(props: AnchorMarksProps) {
     elements.push(
       <line key={`${a.id}-line`} x1={x} y1={yRange[0]} x2={x} y2={yRange[1]} stroke={color} strokeOpacity={0.5} strokeDasharray="3 3" />
     )
-    // 圆点：有有效净值才画
+    // 圆点：有有效净值才画，旁边加 title 文字(前20字符)
     if (val !== null) {
       const y = yAxis.scale(val)
       if (isFinite(y)) {
+        const shortTitle = a.title.length > 20 ? a.title.slice(0, 20) + '…' : a.title
         elements.push(
-          <circle key={`${a.id}-dot`} cx={x} cy={y} r={5} fill={color} stroke={p.bg0} strokeWidth={2} />
+          <circle key={`${a.id}-dot`} cx={x} cy={y} r={5} fill={color} stroke={p.bg0} strokeWidth={2} />,
+          <text key={`${a.id}-label`} x={x + 8} y={y - 8} fontSize={10} fill={p.text1} fontFamily="JetBrains Mono, monospace">
+            {shortTitle}
+          </text>
         )
       }
     }

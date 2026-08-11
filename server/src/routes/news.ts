@@ -95,60 +95,74 @@ newsRoutes.get('/search/stream', async (req, res) => {
             sendEvent('status', { stage: event.stage, message: event.message })
             break
           case 'sources':
-              sendEvent('sources', { urls: event.urls })
-              break
-            case 'article':
-              // 将 LLMAnalysisArticle 映射后发送（路由层不做映射，发送原始 article）
-              sendEvent('article', { article: event.article })
-              break
-            case 'market_context':
-              sendEvent('market_context', { text: event.text })
-              break
-            case 'complete':
-              sendEvent('complete', {
-                articles: event.articles,
-                market_context: event.market_context,
-              })
-              break
-            case 'error':
-              llmFailed = true
-              sendEvent('status', {
-                stage: 'fallback',
-                message: `LLM 失败: ${event.message}，降级到 GDELT...`,
-              })
-              break
-          }
-        })
+            sendEvent('sources', { urls: event.urls })
+            break
+          case 'reasoning_delta':
+            sendEvent('reasoning_delta', { text: event.text })
+            break
+          case 'reasoning_done':
+            sendEvent('reasoning_done', { text: event.text })
+            break
+          case 'output_delta':
+            sendEvent('output_delta', { text: event.text })
+            break
+          case 'output_done':
+            sendEvent('output_done', { text: event.text })
+            break
+          case 'complete':
+            sendEvent('complete', {
+              text: event.text,
+              reasoning: event.reasoning,
+            })
+            break
+          case 'error':
+            llmFailed = true
+            sendEvent('status', {
+              stage: 'fallback',
+              message: `LLM 失败: ${event.message}，降级到 GDELT...`,
+            })
+            break
+        }
+      })
 
-        if (!llmFailed) {
-          if (!clientClosed) sendEvent('done', {})
-          return
-        }
-      } catch (err) {
-        llmFailed = true
-        if (!clientClosed) {
-          sendEvent('status', {
-            stage: 'fallback',
-            message: `LLM 异常: ${(err as Error).message.slice(0, 100)}，降级到 GDELT...`,
-          })
-        }
+      if (!llmFailed) {
+        if (!clientClosed) sendEvent('done', {})
+        return
       }
+    } catch (err) {
+      llmFailed = true
+      if (!clientClosed) {
+        sendEvent('status', {
+          stage: 'fallback',
+          message: `LLM 异常: ${(err as Error).message.slice(0, 100)}，降级到 GDELT...`,
+        })
+      }
+    }
 
-    // 3) 降级：非流式 GDELT 链
+    // 3) 降级：非流式 GDELT 链 -> 包装为 Markdown 文本一次性推送
     if (clientClosed) return
 
     const { articles, market_context } = await searchNews(date, sectors)
     if (clientClosed) return
 
-    // 逐条发送文章（模拟流式体验）
-    for (const article of articles) {
-      if (clientClosed) return
-      sendEvent('article', { article })
-    }
+    // 将 GDELT 文章包装为 Markdown，作为 output 一次性推送（降级链路无真流式）
+    let md = ''
     if (market_context) {
-      sendEvent('market_context', { text: market_context })
+      md += `## 市场概述\n\n${market_context}\n\n`
     }
-    sendEvent('complete', { articles, market_context: market_context || '' })
+    if (articles.length > 0) {
+      md += `## 重要新闻\n\n`
+      for (const a of articles) {
+        const impactLabel = a.impact === 'positive' ? '📈 利好' : a.impact === 'negative' ? '📉 利空' : '➖ 中性'
+        const titlePart = a.url ? `[${a.title}](${a.url})` : a.title
+        md += `- ${impactLabel} **${a.category}** ${titlePart}  \n  ${a.date} · ${a.source}\n`
+      }
+    } else {
+      md += `*该时期暂无新闻数据*\n`
+    }
+    sendEvent('output_delta', { text: md })
+    sendEvent('output_done', { text: md })
+    sendEvent('complete', { text: md, reasoning: '' })
     sendEvent('done', {})
   } catch (err) {
     if (!clientClosed) {

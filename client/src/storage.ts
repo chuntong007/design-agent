@@ -23,6 +23,9 @@ export interface AnchorNews {
   // LLM 归因字段(可选,锚定时从 NewsArticle 复制)
   summary?: string
   impact_reason?: string
+  // 【新】真流式分析报告锚定：锚定整篇 Markdown 分析
+  text?: string
+  reasoning?: string
 }
 
 export interface ViewState {

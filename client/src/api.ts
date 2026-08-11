@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 // API 客户端：统一封装 fetch，处理错误
 import type {
   ApiResult,
@@ -53,9 +54,11 @@ export type NewsStreamEvent =
   | { event: 'sector'; data: SectorInfo | null }
   | { event: 'status'; data: { stage: 'searching' | 'analyzing' | 'fallback' | 'done'; message: string } }
   | { event: 'sources'; data: { urls: string[] } }
-  | { event: 'article'; data: { article: NewsArticle } }
-  | { event: 'market_context'; data: { text: string } }
-  | { event: 'complete'; data: { articles: NewsArticle[]; market_context: string } }
+  | { event: 'reasoning_delta'; data: { text: string } } // 思考过程增量
+  | { event: 'reasoning_done'; data: { text: string } } // 思考完成
+  | { event: 'output_delta'; data: { text: string } } // 最终分析增量（Markdown）
+  | { event: 'output_done'; data: { text: string } } // 最终分析完成
+  | { event: 'complete'; data: { text: string; reasoning: string } }
   | { event: 'error'; data: { message: string } }
   | { event: 'done' }
 

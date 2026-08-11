@@ -19,7 +19,9 @@ export const config = {
     // 运行时 getter：支持热切换环境变量，不缓存启动时的值
     get baseUrl() { return process.env.LLM_BASE_URL || LLM_BASE_URL },
     get apiKey() { return process.env.LLM_API_KEY || '' },
-    get model() { return process.env.LLM_MODEL || 'deepseek-v4-flash' },
+    // 模型由 CC-Switch 默认配置决定，业务系统不指定
+    // 仅在需要显式覆盖时通过环境变量 LLM_MODEL 传入
+    get model() { return process.env.LLM_MODEL || '' },
     get timeout() { return Number(process.env.LLM_TIMEOUT) || 60000 },
   },
 }

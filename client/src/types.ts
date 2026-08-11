@@ -71,6 +71,23 @@ export interface ApiResult<T> {
   error?: string
 }
 
+// ===== AI 新闻分析会话（多检索历史，运行时状态，不持久化）=====
+export interface NewsSession {
+  id: string // 会话唯一 ID（date-fundCode-timestamp）
+  date: string // 检索日期 YYYY-MM-DD
+  fundCode: string
+  fundName?: string
+  sector: SectorInfo | null
+  // 真 token 流式状态
+  reasoning: string
+  outputText: string
+  sources: string[]
+  loading: boolean
+  error: string
+  status: { stage: string; message: string } | null
+  createdAt: number
+}
+
 // ===== 回测相关类型 =====
 export interface Trade {
   date: string

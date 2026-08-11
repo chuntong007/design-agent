@@ -6,7 +6,6 @@
 //   3. 新浪财经滚动新闻（国内可达，仅近期）
 import { httpGet } from '../utils/http'
 import { cacheGet, cacheSet, sleep } from '../utils/cache'
-import { searchNewsByLLM } from './news-llm'
 
 export interface NewsArticle {
   title: string
@@ -44,7 +43,7 @@ function withNewsLock<T>(task: () => Promise<T>): Promise<T> {
   return run as Promise<T>
 }
 
-// ===== 主入口：检索某日期 ±7 天的全球新闻 =====
+// ===== 主入口：检索某日期 ±1 天的全球新闻 =====
 // sectors: 基金领域关键词（用于精准检索，可选）
 // 优先调用 LLM(web_search) 归因分析；失败降级到 GDELT 串行链
 export async function searchNews(
@@ -55,25 +54,8 @@ export async function searchNews(
   const cached = cacheGet<NewsSearchResult>(cacheKey)
   if (cached) return cached
 
-  // 1) 优先：LLM + web_search 归因分析
-  try {
-    const llmResult = await searchNewsByLLM(centerDate, sectors)
-    if (llmResult.articles.length > 0) {
-      const result: NewsSearchResult = {
-        articles: llmResult.articles,
-        market_context: llmResult.market_context,
-      }
-      cacheSet(cacheKey, result, 30 * 60 * 1000)
-      return result
-    }
-  } catch (err) {
-    console.warn(
-      `[news] LLM search failed for ${centerDate}, falling back to GDELT chain:`,
-      (err as Error).message
-    )
-  }
-
-  // 2) 降级：GDELT 串行链（含 Wikipedia / Sina 进一步降级）
+  // 降级链：GDELT 串行链（含 Wikipedia / Sina 进一步降级）
+  // 注：LLM 优先路径由 routes/news.ts 的流式接口处理，此处仅负责 GDELT 兜底
   const articles = await withNewsLock(async () => {
     // 2.1) 尝试 GDELT（走代理，带入领域词）
     try {
@@ -115,8 +97,8 @@ export async function searchNews(
 // sectors: 基金领域关键词，用于聚焦检索
 async function searchByGdelt(centerDate: string, sectors: string[] = []): Promise<NewsArticle[]> {
   const c = new Date(centerDate)
-  const start = new Date(c.getTime() - 7 * 24 * 3600 * 1000)
-  const end = new Date(c.getTime() + 7 * 24 * 3600 * 1000)
+  const start = new Date(c.getTime() - 1 * 24 * 3600 * 1000)
+  const end = new Date(c.getTime() + 1 * 24 * 3600 * 1000)
   const sd = gdeltDate(start)
   const ed = gdeltDate(end)
   // 构建查询：领域词优先，混合中英文

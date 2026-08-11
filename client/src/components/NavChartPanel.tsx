@@ -46,6 +46,10 @@ interface Props {
   anchors: AnchorNews[]
   onPointClick: (date: string, fundCode: string) => void
   newsQuery: { date: string; fundCode: string } | null
+  // 报告日期联动高亮（点击报告日期标签时，图表对应点位闪烁高亮）
+  highlightDate?: string | null
+  // 点击图表空白处回调（抽屉打开时用于关闭抽屉）
+  onChartBlankClick?: () => void
 }
 
 export function NavChartPanel({
@@ -55,6 +59,8 @@ export function NavChartPanel({
   anchors,
   onPointClick,
   newsQuery,
+  highlightDate,
+  onChartBlankClick,
 }: Props) {
   const { palette: p, mode } = useTheme()
   const [hoveredPoint, setHoveredPoint] = useState<{ date: string; fundCode: string } | null>(null)
@@ -115,8 +121,13 @@ export function NavChartPanel({
   }
 
   // 点击图表:优先从 activePayload 获取点击的基金 dataKey,否则 fallback 到 funds[0]
+  // 点空白（无 activeLabel）时触发 onChartBlankClick（抽屉打开时关闭抽屉）
   const handleClick = (state: ClickEventState) => {
-    if (!state || !state.activeLabel) return
+    if (!state || !state.activeLabel) {
+      // 点空白：若提供了 onChartBlankClick 则触发
+      if (onChartBlankClick) onChartBlankClick()
+      return
+    }
     const date = state.activeLabel as string
     let fundCode = ''
     // 从 activePayload 找到点击的数据系列(dataKey 即基金 code)
@@ -132,6 +143,7 @@ export function NavChartPanel({
 
   return (
     <div className={mode === 'dark' ? 'glass-card-dark' : 'glass-card'} style={{ display: 'flex', flexDirection: 'column', height: '100%', borderRadius: '12px' }}>
+      <style>{`@keyframes highlight-pulse { 0%, 100% { stroke-opacity: 0.4; } 50% { stroke-opacity: 0.9; } }`}</style>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
         <div>
           <span style={{ fontSize: '16px', fontWeight: 700, color: p.text0, letterSpacing: '-0.01em' }}>净值走势</span>
@@ -212,7 +224,7 @@ export function NavChartPanel({
                 />
               ))}
             {/* 用 Customized 安全渲染锚点标注：只有 xAxis/yAxis scale 就绪时才渲染 */}
-            <Customized component={(props: CustomizedProps) => <AnchorMarks {...props} funds={funds} aligned={aligned} anchors={anchors} queryPoint={queryPoint} palette={p} />} />
+            <Customized component={(props: CustomizedProps) => <AnchorMarks {...props} funds={funds} aligned={aligned} anchors={anchors} queryPoint={queryPoint} palette={p} highlightDate={highlightDate} />} />
           </ComposedChart>
         </ResponsiveContainer>
         </ErrorBoundary>
@@ -338,10 +350,11 @@ interface AnchorMarksProps extends CustomizedProps {
   anchors: AnchorNews[]
   queryPoint: QueryPoint | null
   palette: ReturnType<typeof useTheme>['palette']
+  highlightDate?: string | null
 }
 
 function AnchorMarks(props: AnchorMarksProps) {
-  const { xAxisMap, yAxisMap, funds, aligned, anchors, queryPoint, palette: p } = props
+  const { xAxisMap, yAxisMap, funds, aligned, anchors, queryPoint, palette: p, highlightDate } = props
   // funds 保留在 props 中以便未来扩展(如按基金颜色区分锚点)
   void funds
   if (!xAxisMap || !yAxisMap) return null
@@ -349,13 +362,38 @@ function AnchorMarks(props: AnchorMarksProps) {
   const yAxis = yAxisMap[0]
   if (!xAxis || !yAxis || !xAxis.scale || !yAxis.scale) return null
 
-  const yRange = yAxis.scale.range()
+  const yScale = yAxis.scale
+  const xScale = xAxis.scale
+  const yRange: [number, number] = (yScale && typeof yScale.range === 'function') ? yScale.range() : [0, 0]
   const elements: React.ReactNode[] = []
+
+  // 报告日期联动高亮：粗竖线 + 闪烁动画
+  if (highlightDate) {
+    const idx = aligned.dates.indexOf(highlightDate)
+    if (idx >= 0) {
+      const x = xScale!(highlightDate)
+      if (isFinite(x)) {
+        elements.push(
+          <line
+            key="highlight-line"
+            x1={x}
+            y1={yRange[0]}
+            x2={x}
+            y2={yRange[1]}
+            stroke={p.accent}
+            strokeWidth={2}
+            strokeOpacity={0.8}
+            style={{ animation: 'highlight-pulse 1.5s ease-in-out infinite' }}
+          />
+        )
+      }
+    }
+  }
 
   // 当前检索点标记
   if (queryPoint && queryPoint.idx >= 0 && queryPoint.idx < aligned.dates.length && isFinite(queryPoint.val)) {
-    const x = xAxis.scale(aligned.dates[queryPoint.idx])
-    const y = yAxis.scale(queryPoint.val)
+    const x = xScale!(aligned.dates[queryPoint.idx])
+    const y = yScale!(queryPoint.val)
     if (isFinite(x) && isFinite(y)) {
       elements.push(
         <line key="qp-line" x1={x} y1={yRange[0]} x2={x} y2={yRange[1]} stroke={p.accent} strokeOpacity={0.3} strokeDasharray="3 3" />,
@@ -377,7 +415,7 @@ function AnchorMarks(props: AnchorMarksProps) {
         break
       }
     }
-    const x = xAxis.scale(a.date)
+    const x = xScale!(a.date)
     if (!isFinite(x)) return
     const color = a.impact === 'positive' ? p.up : a.impact === 'negative' ? p.down : p.neutral
     // 竖线：只要有日期就画
@@ -386,7 +424,7 @@ function AnchorMarks(props: AnchorMarksProps) {
     )
     // 圆点：有有效净值才画，旁边加 title 文字(前20字符)
     if (val !== null) {
-      const y = yAxis.scale(val)
+      const y = yScale!(val)
       if (isFinite(y)) {
         const shortTitle = a.title.length > 20 ? a.title.slice(0, 20) + '…' : a.title
         elements.push(

@@ -23,4 +23,7 @@ app.use('/api/backtest', backtestRoutes)
 app.listen(config.port, () => {
   console.log(`[fund-dashboard] server listening on http://localhost:${config.port}`)
   console.log(`[fund-dashboard] proxy: ${config.proxyUrl}`)
+  console.log(`[fund-dashboard] LLM baseUrl: ${config.llm.baseUrl}`)
+  console.log(`[fund-dashboard] LLM model: ${config.llm.model}`)
+  console.log(`[fund-dashboard] LLM apiKey: ${config.llm.apiKey ? 'configured' : 'none (CC-Switch mode)'}`)
 })

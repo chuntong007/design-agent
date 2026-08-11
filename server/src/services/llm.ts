@@ -157,12 +157,18 @@ export async function callResponsesAPI(
   const timer = setTimeout(() => controller.abort(), timeout)
 
   try {
+    // 构建请求头：CC-Switch 模式下不需要 Authorization（认证由 CC-Switch 完成）
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    }
+    // 仅当显式配置了 apiKey 时才发 Authorization（兼容直连 DeepSeek 的场景）
+    if (config.llm.apiKey) {
+      headers.Authorization = `Bearer ${config.llm.apiKey}`
+    }
+
     const res = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${config.llm.apiKey}`,
-      },
+      headers,
       body: JSON.stringify(body),
       signal: controller.signal,
     })
@@ -289,13 +295,18 @@ export async function callResponsesAPIStream(
   const timer = setTimeout(() => controller.abort(), timeout)
 
   try {
+    // 构建请求头：CC-Switch 模式下不需要 Authorization
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+    }
+    if (config.llm.apiKey) {
+      headers.Authorization = `Bearer ${config.llm.apiKey}`
+    }
+
     const res = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${config.llm.apiKey}`,
-        Accept: 'text/event-stream',
-      },
+      headers,
       body: JSON.stringify(body),
       signal: controller.signal,
     })
@@ -309,7 +320,8 @@ export async function callResponsesAPIStream(
       throw new Error('Responses API returned no stream body')
     }
 
-    // SSE 解析：按行读取，data: 开头的行是 JSON
+    // SSE 解析：SSE 事件以双换行(\n\n 或 \r\n\r\n)分隔
+    // 每个事件块内含多行: event: xxx / data: xxx
     let accumulatedText = ''
     let emittedArticleCount = 0
     let allSources: string[] = []
@@ -323,17 +335,28 @@ export async function callResponsesAPIStream(
     
     await new Promise<void>((resolve, reject) => {
       reader.on('data', (chunk: Buffer) => {
-        buffer += decoder.decode(chunk, { stream: true })
+        const text = decoder.decode(chunk, { stream: true })
+        buffer += text
         
-        // 按双换行分割 SSE 事件块
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || '' // 保留最后不完整的行
+        // 按双换行分割 SSE 事件块（兼容 \n\n 和 \r\n\r\n）
+        const blocks = buffer.split(/\r?\n\r?\n/)
+        buffer = blocks.pop() || '' // 保留最后不完整的块
 
-        for (const line of lines) {
-          const trimmed = line.trim()
-          if (!trimmed || !trimmed.startsWith('data:')) continue
+        for (const block of blocks) {
+          const lines = block.split(/\r?\n/)
+          let eventType = ''
+          let dataStr = ''
+          for (const line of lines) {
+            const trimmed = line.trim()
+            if (trimmed.startsWith('event:')) {
+              eventType = trimmed.slice(6).trim()
+            } else if (trimmed.startsWith('data:')) {
+              dataStr += trimmed.slice(5).trim()
+            }
+          }
           
-          const dataStr = trimmed.slice(5).trim()
+          // 有些 SSE 只有 data: 没有 event:（DeepSeek 可能用 type 字段区分）
+          if (!dataStr) continue
           if (dataStr === '[DONE]') {
             resolve()
             return
@@ -341,17 +364,26 @@ export async function callResponsesAPIStream(
 
           try {
             const evt = JSON.parse(dataStr) as { type: string; [key: string]: unknown }
-            handleSSEEvent(evt)
+            // 如果 SSE 头有 event: 字段，用它；否则用 JSON 里的 type
+            const evtType = eventType || evt.type
+            handleSSEEvent({ ...evt, type: evtType })
           } catch {
-            // 非 JSON 行跳过（如注释或空行）
+            // 非 JSON 行跳过
           }
         }
       })
 
       reader.on('end', () => {
         // 处理 buffer 中剩余数据
-        if (buffer.trim().startsWith('data:')) {
-          const dataStr = buffer.trim().slice(5).trim()
+        if (buffer.trim()) {
+          const lines = buffer.split(/\r?\n/)
+          let dataStr = ''
+          for (const line of lines) {
+            const trimmed = line.trim()
+            if (trimmed.startsWith('data:')) {
+              dataStr += trimmed.slice(5).trim()
+            }
+          }
           if (dataStr && dataStr !== '[DONE]') {
             try {
               const evt = JSON.parse(dataStr) as { type: string; [key: string]: unknown }
@@ -365,6 +397,7 @@ export async function callResponsesAPIStream(
       reader.on('error', (err: Error) => reject(err))
 
       function handleSSEEvent(evt: { type: string; [key: string]: unknown }) {
+        console.error(`[llm-stream] event: ${evt.type}`)
         switch (evt.type) {
           case 'response.web_search_call.in_progress':
           case 'response.web_search_call.searching': {
@@ -408,17 +441,21 @@ export async function callResponsesAPIStream(
           case 'response.completed': {
             // 完整响应，解析最终 JSON
             const response = (evt as { response?: ResponsesAPIBody }).response
+            console.error(`[llm-stream] completed, has response: ${!!response}, has output: ${!!response?.output}, accumulatedText len: ${accumulatedText.length}`)
             if (response) {
               try {
                 const parsed = parseResponseOutput(response)
+                console.error(`[llm-stream] parsed articles: ${parsed.analysis.articles.length}, context len: ${parsed.analysis.market_context.length}`)
                 onEvent({
                   type: 'complete',
                   articles: parsed.analysis.articles,
                   market_context: parsed.analysis.market_context,
                 })
               } catch (e) {
+                console.error(`[llm-stream] parseResponseOutput failed: ${(e as Error).message}, fallback to accumulatedText`)
                 // 如果完整解析失败，用累积文本兜底
                 const analysis = parseAccumulatedText(accumulatedText)
+                console.error(`[llm-stream] fallback articles: ${analysis.articles.length}`)
                 onEvent({
                   type: 'complete',
                   articles: analysis.articles,
@@ -426,6 +463,7 @@ export async function callResponsesAPIStream(
                 })
               }
             } else {
+              console.error('[llm-stream] no response in completed event, using accumulatedText')
               const analysis = parseAccumulatedText(accumulatedText)
               onEvent({
                 type: 'complete',
@@ -535,9 +573,11 @@ function tryExtractMarketContext(accumulatedText: string): string {
 
 function parseAccumulatedText(text: string): LLMAnalysis {
   let textToParse = text.trim()
+  // 1. 剥离 markdown 代码块标记
   if (textToParse.startsWith('```')) {
     textToParse = textToParse.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
   }
+  // 2. 尝试直接解析
   try {
     const analysis = JSON.parse(textToParse) as LLMAnalysis
     if (!analysis.articles || !Array.isArray(analysis.articles)) {
@@ -548,6 +588,50 @@ function parseAccumulatedText(text: string): LLMAnalysis {
     }
     return analysis
   } catch {
-    return { articles: [], market_context: '' }
+    // 直接解析失败,继续尝试其他方式
   }
+  // 3. 尝试从文本中提取第一个 { ... } JSON 对象（大括号平衡）
+  const jsonStart = textToParse.indexOf('{')
+  if (jsonStart !== -1) {
+    let depth = 0
+    let inString = false
+    let escape = false
+    let end = -1
+    for (let i = jsonStart; i < textToParse.length; i++) {
+      const ch = textToParse[i]
+      if (escape) {
+        escape = false
+      } else if (ch === '\\') {
+        escape = true
+      } else if (ch === '"') {
+        inString = !inString
+      } else if (!inString) {
+        if (ch === '{') depth++
+        else if (ch === '}') {
+          depth--
+          if (depth === 0) {
+            end = i + 1
+            break
+          }
+        }
+      }
+    }
+    if (end > jsonStart) {
+      const jsonStr = textToParse.slice(jsonStart, end)
+      try {
+        const analysis = JSON.parse(jsonStr) as LLMAnalysis
+        if (analysis.articles && Array.isArray(analysis.articles)) {
+          if (typeof analysis.market_context !== 'string') {
+            analysis.market_context = ''
+          }
+          return analysis
+        }
+      } catch {
+        // 提取的 JSON 仍然无效
+      }
+    }
+  }
+  // 4. 所有方式都失败,返回空
+  console.error(`[llm-stream] parseAccumulatedText failed, text preview: ${textToParse.slice(0, 200)}`)
+  return { articles: [], market_context: '' }
 }

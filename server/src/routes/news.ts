@@ -83,21 +83,18 @@ newsRoutes.get('/search/stream', async (req, res) => {
     if (clientClosed) return
     sendEvent('sector', sectorInfo)
 
-    // 2) LLM 流式检索（优先）
-    // 若 LLM_API_KEY 未配置或调用失败，降级到非流式 GDELT 链
-    const hasLlmKey = !!process.env.LLM_API_KEY
-    if (hasLlmKey) {
-      sendEvent('status', { stage: 'searching', message: '正在调用 LLM 联网搜索...' })
+    // 2) LLM 流式检索（优先，认证由 CC-Switch 完成，无需检查 apiKey）
+    sendEvent('status', { stage: 'searching', message: '正在调用 LLM 联网搜索...' })
 
-      let llmFailed = false
-      try {
-        await searchNewsByLLMStream(date, sectors, fundName, (event: StreamEvent) => {
-          if (clientClosed) return
-          switch (event.type) {
-            case 'status':
-              sendEvent('status', { stage: event.stage, message: event.message })
-              break
-            case 'sources':
+    let llmFailed = false
+    try {
+      await searchNewsByLLMStream(date, sectors, fundName, (event: StreamEvent) => {
+        if (clientClosed) return
+        switch (event.type) {
+          case 'status':
+            sendEvent('status', { stage: event.stage, message: event.message })
+            break
+          case 'sources':
               sendEvent('sources', { urls: event.urls })
               break
             case 'article':
@@ -136,16 +133,9 @@ newsRoutes.get('/search/stream', async (req, res) => {
           })
         }
       }
-    }
 
     // 3) 降级：非流式 GDELT 链
     if (clientClosed) return
-    if (!hasLlmKey) {
-      sendEvent('status', {
-        stage: 'fallback',
-        message: 'LLM 未配置，使用 GDELT 检索...',
-      })
-    }
 
     const { articles, market_context } = await searchNews(date, sectors)
     if (clientClosed) return

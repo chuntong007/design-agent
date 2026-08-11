@@ -33,10 +33,16 @@ export async function searchNewsByLLM(
     `请检索 ${date} 前后 7 天内,影响"${sectorText}"领域的重大财经新闻。`,
     '对每条新闻分析:摘要、影响(positive/negative/neutral)、影响原因、分类、相关度(0-1)、受影响领域。',
     '最后给出该时期市场整体环境概述。',
+    '',
+    '重要:你必须只输出纯 JSON,不要输出任何 Markdown 格式、标题、解释或额外文本。',
+    'JSON 格式如下:',
+    '{"articles":[{"title":"新闻标题","url":"来源URL","date":"YYYY-MM-DD","summary":"一句话摘要","impact":"positive|negative|neutral","impact_reason":"影响原因","category":"分类","relevance":0.0-1.0,"affected_sectors":["领域1"]}],"market_context":"市场整体概述"}',
   ].join('\n')
 
   const instructions =
     '你是基金新闻归因分析师,擅长分析财经新闻对基金净值的影响。使用 web_search 工具检索真实新闻,然后进行归因分析。'
+    + '【输出格式要求】你必须只输出纯 JSON 对象,不要输出任何 Markdown 标题、代码块标记、解释文字或额外内容。'
+    + '输出格式: {"articles":[...],"market_context":"..."}'
 
   const response = await callResponsesAPI(input, instructions)
   const { sources, analysis } = parseResponseOutput(response)
@@ -126,10 +132,16 @@ export async function searchNewsByLLMStream(
     `请检索 ${date} 前后 7 天内,影响"${sectorText}"领域的重大财经新闻。`,
     '对每条新闻分析:摘要、影响(positive/negative/neutral)、影响原因、分类、相关度(0-1)、受影响领域。',
     '最后给出该时期市场整体环境概述。',
+    '',
+    '重要:你必须只输出纯 JSON,不要输出任何 Markdown 格式、标题、解释或额外文本。',
+    'JSON 格式如下:',
+    '{"articles":[{"title":"新闻标题","url":"来源URL","date":"YYYY-MM-DD","summary":"一句话摘要","impact":"positive|negative|neutral","impact_reason":"影响原因","category":"分类","relevance":0.0-1.0,"affected_sectors":["领域1"]}],"market_context":"市场整体概述"}',
   ].join('\n')
 
   const instructions =
     '你是基金新闻归因分析师,擅长分析财经新闻对基金净值的影响。使用 web_search 工具检索真实新闻,然后进行归因分析。'
+    + '【输出格式要求】你必须只输出纯 JSON 对象,不要输出任何 Markdown 标题、代码块标记、解释文字或额外内容。'
+    + '输出格式: {"articles":[...],"market_context":"..."}'
 
   // 收集流式结果
   const collectedArticles: LLMAnalysisArticle[] = []

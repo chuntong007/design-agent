@@ -61,6 +61,7 @@ export type NewsStreamEvent =
 
 // 流式新闻检索：消费 SSE，通过回调实时推送事件
 // 返回 AbortController 用于取消请求
+// 注意：SSE 请求直连后端 8787 端口，绕过 Vite 代理（代理会缓冲 SSE）
 export function searchNewsStream(
   date: string,
   fundCode: string | undefined,
@@ -68,10 +69,12 @@ export function searchNewsStream(
 ): AbortController {
   const controller = new AbortController()
   const path = `/news/search/stream?date=${encodeURIComponent(date)}${fundCode ? `&fundCode=${encodeURIComponent(fundCode)}` : ''}`
+  // 直连后端：开发环境用 8787，生产环境用同源（由反向代理处理）
+  const streamBase = import.meta.env.DEV ? 'http://localhost:8787/api' : BASE
 
   ;(async () => {
     try {
-      const res = await fetch(`${BASE}${path}`, {
+      const res = await fetch(`${streamBase}${path}`, {
         signal: controller.signal,
         headers: { Accept: 'text/event-stream' },
       })

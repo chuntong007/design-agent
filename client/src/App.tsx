@@ -1,9 +1,10 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
-import type { FundDetail, SectorInfo, NewsSession } from './types'
+import type { FundDetail, SectorInfo, NewsSession, GrowthPoint } from './types'
 import { api, searchNewsStream } from './api'
 import { storage, type PinnedFund, type AnchorNews } from './storage'
 import { seriesColor, makeStyles } from './theme'
 import { useTheme } from './ThemeContext'
+import { RANGE_TO_DAY, type RangeKey } from './metrics'
 import { Header } from './components/Header'
 import { FundList } from './components/FundList'
 import { NavChartPanel } from './components/NavChartPanel'
@@ -26,8 +27,11 @@ export function App() {
   const styles = makeStyles(p)
   const [funds, setFunds] = useState<LoadedFund[]>([])
   const [range, setRange] = useState<string>(storage.getView().range)
-  const [normalized, setNormalized] = useState<boolean>(storage.getView().normalized)
+  const [chartMode, setChartMode] = useState<'return' | 'nav'>(storage.getView().chartMode)
   const [selectedCode, setSelectedCode] = useState<string>('')
+  // 蛋卷累计收益率缓存：key = `${code}:${day}`；growthErrors 记录失败避免重复请求
+  const [growthMap, setGrowthMap] = useState<Record<string, GrowthPoint[]>>({})
+  const [growthErrors, setGrowthErrors] = useState<Record<string, string>>({})
   const [anchors, setAnchors] = useState<AnchorNews[]>(storage.getAnchors())
   // 主 tab：分析看板 / 策略回测
   const [mainTab, setMainTab] = useState<MainTab>('analysis')
@@ -62,8 +66,8 @@ export function App() {
 
   // 持久化视图状态
   useEffect(() => {
-    storage.setView({ range, normalized })
-  }, [range, normalized])
+    storage.setView({ range, chartMode })
+  }, [range, chartMode])
   useEffect(() => {
     storage.setAnchors(anchors)
   }, [anchors])
@@ -93,6 +97,29 @@ export function App() {
       }
     })
   }, [funds.length]) // 仅在数量变化时触发
+
+  // 按需加载蛋卷累计收益率：补齐缺失的 (fund, day) 数据（区间切换随之改变 day 参数）
+  const ensureGrowth = useCallback(
+    (codes: string[], rangeKey: string) => {
+      const day = RANGE_TO_DAY[rangeKey as RangeKey] ?? 'all'
+      codes.forEach((code) => {
+        const key = `${code}:${day}`
+        if (growthMap[key] || growthErrors[key]) return
+        api
+          .getFundGrowth(code, day)
+          .then((points) => setGrowthMap((m) => ({ ...m, [key]: points })))
+          .catch((err) => setGrowthErrors((e) => ({ ...e, [key]: (err as Error).message })))
+      })
+    },
+    [growthMap, growthErrors]
+  )
+
+  // 区间/基金列表变化时补齐 growth 数据（仅对有 detail 的基金；guard 防重复）
+  useEffect(() => {
+    if (mainTab !== 'analysis') return
+    const codes = funds.filter((f) => f.detail).map((f) => f.code)
+    ensureGrowth(codes, range)
+  }, [funds, range, mainTab, ensureGrowth])
 
   // 添加基金
   const addFund = useCallback(
@@ -285,8 +312,8 @@ export function App() {
         onAdd={addFund}
         range={range}
         onRangeChange={setRange}
-        normalized={normalized}
-        onNormalizedChange={setNormalized}
+        chartMode={chartMode}
+        onChartModeChange={setChartMode}
         mainTab={mainTab}
         onMainTabChange={setMainTab}
       />
@@ -307,7 +334,9 @@ export function App() {
               <NavChartPanel
                 funds={loadedFunds}
                 range={range}
-                normalized={normalized}
+                chartMode={chartMode}
+                growthMap={growthMap}
+                growthErrors={growthErrors}
                 anchors={anchors}
                 onPointClick={onPointClick}
                 newsQuery={activeSession ? { date: activeSession.date, fundCode: activeSession.fundCode } : null}
@@ -421,7 +450,7 @@ export function App() {
           {/* 右侧：重仓股 + 已锚定报告列表 */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', minHeight: 0, overflow: 'hidden' }}>
             <div style={{ ...styles.card, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-              <HoldingsPanel fund={selectedFund} range={range} normalized={normalized} />
+              <HoldingsPanel fund={selectedFund} range={range} />
             </div>
             <div style={{ ...styles.card, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
               <AnchoredList anchors={anchors} onRemove={removeAnchor} funds={funds} />

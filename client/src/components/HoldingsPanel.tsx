@@ -10,10 +10,9 @@ import { filterByRange, type RangeKey } from '../metrics'
 interface Props {
   fund: LoadedFund | undefined
   range: string
-  normalized: boolean
 }
 
-export function HoldingsPanel({ fund, range, normalized }: Props) {
+export function HoldingsPanel({ fund, range }: Props) {
   const { palette: p } = useTheme()
   const styles = makeStyles(p)
   const [holdings, setHoldings] = useState<FundHoldings | null>(null)
@@ -22,6 +21,8 @@ export function HoldingsPanel({ fund, range, normalized }: Props) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [tab, setTab] = useState<'distribution' | 'quotes' | 'compare'>('distribution')
+  // 走势对比的归一化开关（面板内部自有，脱离 header 图表模式联动）
+  const [normalized, setNormalized] = useState(true)
 
   useEffect(() => {
     if (!fund?.code) return
@@ -117,7 +118,7 @@ export function HoldingsPanel({ fund, range, normalized }: Props) {
       </div>
 
       {/* Tab 切换 */}
-      <div style={{ display: 'flex', gap: '2px', padding: '6px 8px', borderBottom: `1px solid ${p.border}` }}>
+      <div style={{ display: 'flex', gap: '2px', padding: '6px 8px', borderBottom: `1px solid ${p.border}`, alignItems: 'center' }}>
         {([
           ['distribution', '持仓分布'],
           ['quotes', '个股行情'],
@@ -140,6 +141,26 @@ export function HoldingsPanel({ fund, range, normalized }: Props) {
             {label}
           </button>
         ))}
+        {/* 走势对比的归一化开关：面板内部自有，默认归一化到首日 100 */}
+        {tab === 'compare' && (
+          <button
+            onClick={() => setNormalized((n) => !n)}
+            style={{
+              marginLeft: 'auto',
+              background: p.bg2,
+              color: p.text1,
+              border: `1px solid ${p.border}`,
+              borderRadius: '4px',
+              padding: '3px 8px',
+              fontSize: '11px',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+            title="归一化到首日 100 便于多股对比"
+          >
+            {normalized ? '归一化' : '原价'}
+          </button>
+        )}
       </div>
 
       <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>

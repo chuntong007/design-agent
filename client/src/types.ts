@@ -9,10 +9,18 @@ export interface FundSearchResult {
 export interface NetWorthPoint {
   date: string
   timestamp: number
-  nav: number
+  nav: number // 累计净值（含分红再投资，用于成立来业绩走势/回测/指标）
+  unitNav: number // 单位净值（当日成交价，用于显示单日价格）
   returnRate: number
 }
-
+// 蛋卷累计收益率曲线数据点（value 为区间起点重定基的累计收益率 %）
+export interface GrowthPoint {
+  date: string
+  timestamp: number
+  value: number // 累计收益率 %
+  thanValue: number // 对比基准 %
+  performanceValue: number // 业绩比较基准 %
+}
 export interface FundDetail {
   code: string
   name: string

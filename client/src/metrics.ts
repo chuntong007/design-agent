@@ -1,6 +1,6 @@
 // 指标计算：区间收益、年初至今、最大回撤、年化波动率、夏普比率
 // 所有计算基于净值序列，假设无风险利率 2%
-import type { NetWorthPoint } from './types'
+import type { NetWorthPoint, GrowthPoint } from './types'
 
 const RISK_FREE_RATE = 0.02 // 无风险利率（年化）
 
@@ -146,4 +146,87 @@ export function alignSeries(
 
 function pad(n: number): string {
   return String(n).padStart(2, '0')
+}
+
+// ===== 蛋卷累计收益率（图表"累计收益率"模式）=====
+// 蛋卷 growth 接口 day 参数随区间切换：1m/3m/6m/1y/3y/5y/ty(年初至今)/all
+export const RANGE_TO_DAY: Record<RangeKey, string> = {
+  '1m': '1m',
+  '3m': '3m',
+  '6m': '6m',
+  '1y': '1y',
+  '3y': '3y',
+  '5y': '5y',
+  ytd: 'ty',
+  all: 'all',
+}
+
+// 从累计净值换算累计收益率（蛋卷数据缺失时的降级）：以区间首点为基准
+export function netWorthToReturn(points: NetWorthPoint[]): GrowthPoint[] {
+  if (points.length === 0) return []
+  const base = points[0].nav
+  return points.map((p) => ({
+    date: p.date,
+    timestamp: p.timestamp,
+    value: (p.nav / base - 1) * 100,
+    thanValue: 0,
+    performanceValue: 0,
+  }))
+}
+
+export interface GrowthFundInput {
+  code: string
+  name: string
+  color: string
+  points: GrowthPoint[] // 对应 day 窗口的蛋卷累计收益率（已以区间起点重定基）
+}
+
+// 多基金蛋卷累计收益率按日期对齐（value 已重定基，无需再换算）
+// 产出 series(基金收益率) 与 benchSeries(业绩比较基准) 两套序列，用于叠加基准虚线
+export interface AlignedReturns {
+  timestamps: number[]
+  dates: string[]
+  series: { code: string; name: string; color: string; values: (number | null)[] }[]
+  benchSeries: { code: string; values: (number | null)[] }[]
+}
+
+export function alignReturns(funds: GrowthFundInput[]): AlignedReturns {
+  if (funds.length === 0) return { timestamps: [], dates: [], series: [], benchSeries: [] }
+
+  // 收集所有时间戳并去重排序
+  const tsSet = new Set<number>()
+  for (const f of funds) for (const p of f.points) tsSet.add(p.timestamp)
+  const timestamps = Array.from(tsSet).sort((a, b) => a - b)
+  const dates = timestamps.map((ts) => {
+    const d = new Date(ts)
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+  })
+
+  const series: AlignedReturns['series'] = []
+  const benchSeries: AlignedReturns['benchSeries'] = []
+  for (const f of funds) {
+    const map = new Map<number, GrowthPoint>()
+    for (const p of f.points) map.set(p.timestamp, p)
+    // 前向填充
+    const values: (number | null)[] = []
+    const bench: (number | null)[] = []
+    let lastVal: number | null = null
+    let lastBench: number | null = null
+    for (const ts of timestamps) {
+      const p = map.get(ts)
+      if (p) {
+        lastVal = p.value
+        lastBench = p.performanceValue
+        values.push(p.value)
+        bench.push(p.performanceValue)
+      } else {
+        values.push(lastVal)
+        bench.push(lastBench)
+      }
+    }
+    series.push({ code: f.code, name: f.name, color: f.color, values })
+    benchSeries.push({ code: f.code, values: bench })
+  }
+
+  return { timestamps, dates, series, benchSeries }
 }

@@ -1,5 +1,12 @@
 import { Router } from 'express'
-import { searchFunds, getFundDetail, getFundHoldings } from '../services/fund'
+import {
+  searchFunds,
+  getFundDetail,
+  getFundHoldings,
+  getFundGrowth,
+  GROWTH_DAY_WHITELIST,
+  type GrowthDay,
+} from '../services/fund'
 
 export const fundRoutes = Router()
 
@@ -43,6 +50,30 @@ fundRoutes.get('/holdings', async (req, res) => {
   try {
     const holdings = await getFundHoldings(code)
     res.json({ ok: true, data: holdings })
+  } catch (err) {
+    res.status(500).json({ ok: false, error: (err as Error).message })
+  }
+})
+
+// 蛋卷累计收益率曲线：/api/fund/growth?code=161024&day=1y
+// day 白名单：1m/3m/6m/1y/3y/5y/ty(年初至今)/all，默认 all
+fundRoutes.get('/growth', async (req, res) => {
+  const code = String(req.query.code || '').trim()
+  const day = (String(req.query.day || 'all').trim() || 'all') as GrowthDay
+  if (!code) {
+    res.json({ ok: false, error: 'code required' })
+    return
+  }
+  if (!GROWTH_DAY_WHITELIST.includes(day as (typeof GROWTH_DAY_WHITELIST)[number])) {
+    res.json({
+      ok: false,
+      error: `invalid day: ${day}, allowed: ${GROWTH_DAY_WHITELIST.join('/')}`,
+    })
+    return
+  }
+  try {
+    const points = await getFundGrowth(code, day)
+    res.json({ ok: true, data: points })
   } catch (err) {
     res.status(500).json({ ok: false, error: (err as Error).message })
   }

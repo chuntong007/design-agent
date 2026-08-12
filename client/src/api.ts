@@ -12,6 +12,7 @@ import type {
   BacktestResult,
   SectorInfo,
   StrategyInfo,
+  GrowthPoint,
 } from './types'
 
 const BASE = '/api'
@@ -142,6 +143,11 @@ export const api = {
     request<FundSearchResult[]>(`/fund/search?keyword=${encodeURIComponent(keyword)}`),
   getFundDetail: (code: string) => request<FundDetail>(`/fund/detail?code=${code}`),
   getFundHoldings: (code: string) => request<FundHoldings>(`/fund/holdings?code=${code}`),
+  // 蛋卷累计收益率曲线：day 取值 1m/3m/6m/1y/3y/5y/ty(年初至今)/all
+  getFundGrowth: (code: string, day: string) =>
+    request<GrowthPoint[]>(
+      `/fund/growth?code=${encodeURIComponent(code)}&day=${encodeURIComponent(day)}`
+    ),
   getStockQuotes: (codes: string[]) =>
     request<StockQuote[]>(`/stock/quotes?codes=${codes.join(',')}`),
   getStockKlines: (codes: string[], rangeDays: number) =>

@@ -13,8 +13,9 @@ export interface FundSearchResult {
 export interface NetWorthPoint {
   date: string // YYYY-MM-DD
   timestamp: number // ms
-  nav: number // 单位净值
-  returnRate: number // 当日涨跌幅 %
+  nav: number // 累计净值（含分红再投资，用于成立来业绩走势/回测/指标，与官方图表一致）
+  unitNav: number // 单位净值（当日成交价，用于显示单日价格）
+  returnRate: number // 当日涨跌幅 %（基于单位净值计算，分红日为除权后涨跌）
 }
 
 export interface FundDetail {
@@ -66,6 +67,107 @@ export async function getFundDetail(code: string): Promise<FundDetail> {
   // 净值当日不变，缓存 2 小时
   cacheSet(cacheKey, detail, 2 * 60 * 60 * 1000)
   return detail
+}
+
+// ===== 蛋卷累计收益率曲线 =====
+// 数据源：https://danjuanfunds.com/djapi/fund/growth/{code}?day=X （公开无鉴权，需 Referer）
+// fund_nav_growth[]: {date, nav(单位净值), percentage(日涨跌幅%), value(累计收益率,小数),
+//                     than_value(对比), performance_value(业绩比较基准)}
+// value 以区间起点重定基（首点=0），×100 得 %。day 参数：1m/3m/6m/1y/3y/5y/ty(年初至今)/all
+// 注意：ytd 参数无效（返回 999001 参数错误），年初至今必须用 ty
+export interface GrowthPoint {
+  date: string // YYYY-MM-DD
+  timestamp: number // ms
+  value: number // 累计收益率 %（蛋卷 value×100，以区间起点重定基）
+  thanValue: number // 对比基准 %（than_value×100）
+  performanceValue: number // 业绩比较基准 %（performance_value×100）
+}
+
+export const GROWTH_DAY_WHITELIST = ['1m', '3m', '6m', '1y', '3y', '5y', 'ty', 'all'] as const
+export type GrowthDay = (typeof GROWTH_DAY_WHITELIST)[number]
+
+export async function getFundGrowth(code: string, day: GrowthDay = 'all'): Promise<GrowthPoint[]> {
+  const cacheKey = `fund:growth:${code}:${day}`
+  const cached = cacheGet<GrowthPoint[]>(cacheKey)
+  if (cached) return cached
+
+  const url = `https://danjuanfunds.com/djapi/fund/growth/${code}?day=${day}`
+  const text = await httpGet(url, {
+    headers: {
+      Referer: `https://danjuanfunds.com/funding/${code}`,
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+    },
+    retries: 2,
+  })
+  let json: any
+  try {
+    json = JSON.parse(text)
+  } catch {
+    throw new Error(`danjuan growth invalid response: ${code} day=${day}`)
+  }
+  const list: any[] = json?.data?.fund_nav_growth || []
+  if (list.length === 0) {
+    throw new Error(`danjuan growth empty: ${code} day=${day}`)
+  }
+  const points: GrowthPoint[] = list.map((p) => ({
+    date: p.date,
+    timestamp: new Date(`${p.date}T00:00:00+08:00`).getTime(),
+    value: toPct(p.value),
+    thanValue: toPct(p.than_value),
+    performanceValue: toPct(p.performance_value),
+  }))
+  // 净值当日不变，缓存 2 小时
+  cacheSet(cacheKey, points, 2 * 60 * 60 * 1000)
+  return points
+}
+
+// 蛋卷返回小数（如 "0.024096"），转为 %（*100）；非法值按 0
+function toPct(v: unknown): number {
+  const n = Number(v)
+  return Number.isFinite(n) ? n * 100 : 0
+}
+
+// ===== 单位净值 + 累计净值 合并提取 =====
+// pingzhongdata 中两个数组的 timestamp 完全对齐（已验证：同基金同长度、0 错位）
+// - Data_netWorthTrend: [{x, y=单位净值, equityReturn=涨跌幅}, ...]
+// - Data_ACWorthTrend: [[x, y=累计净值], ...]
+// 官方"业绩走势/成立以来"图表使用累计净值（含分红再投资），单位净值仅在显示单日价格时用
+// 对有分红/拆分的基金（如 161024），累计净值反映真实总回报，单位净值会因除权骤降
+function extractNetWorthTrend(text: string): NetWorthPoint[] {
+  // 提取单位净值序列（含涨跌幅）
+  const mUnit = text.match(/Data_netWorthTrend\s*=\s*(\[[\s\S]*?\])\s*;/)
+  // 提取累计净值序列（纯数值数组）
+  const mAccu = text.match(/Data_ACWorthTrend\s*=\s*(\[[\s\S]*?\])\s*;/)
+  if (!mUnit) return []
+
+  let unitArr: any[] = []
+  let accuMap = new Map<number, number>()
+  try {
+    unitArr = JSON.parse(mUnit[1]) as any[]
+  } catch {
+    return []
+  }
+  if (mAccu) {
+    try {
+      const accuArr = JSON.parse(mAccu[1]) as [number, number][]
+      for (const [ts, y] of accuArr) accuMap.set(ts, y)
+    } catch {
+      // 累计净值解析失败时退化为用单位净值
+    }
+  }
+
+  return unitArr.map((p) => {
+    const d = new Date(p.x)
+    const accu = accuMap.has(p.x) ? accuMap.get(p.x)! : p.y
+    return {
+      date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
+      timestamp: p.x,
+      // nav = 累计净值（成立来业绩走势用）；无累计净值时退化为单位净值
+      nav: accu,
+      unitNav: p.y,
+      returnRate: p.equityReturn ?? 0,
+    }
+  })
 }
 
 // ===== 重仓股 =====
@@ -158,24 +260,7 @@ function extractCurrentManager(text: string): string {
   }
 }
 
-function extractNetWorthTrend(text: string): NetWorthPoint[] {
-  const m = text.match(/Data_netWorthTrend\s*=\s*(\[[\s\S]*?\])\s*;/)
-  if (!m) return []
-  try {
-    const arr = JSON.parse(m[1]) as any[]
-    return arr.map((p) => {
-      const d = new Date(p.x)
-      return {
-        date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
-        timestamp: p.x,
-        nav: p.y,
-        returnRate: p.equityReturn ?? 0,
-      }
-    })
-  } catch {
-    return []
-  }
-}
+// 旧版 extractNetWorthTrend 已重构为合并单位净值+累计净值，见上方实现
 
 function parseHoldings(text: string): HoldingStock[] {
   // var apidata={ content:"<table>...</table>", arryear:..., ... };

@@ -30,7 +30,7 @@ export interface AnchorNews {
 
 export interface ViewState {
   range: string
-  normalized: boolean
+  chartMode: 'return' | 'nav' // return=累计收益率(默认, 蛋卷口径) / nav=绝对净值
 }
 
 const DEMO_FUNDS: PinnedFund[] = [
@@ -78,9 +78,17 @@ export const storage = {
   getView(): ViewState {
     try {
       const raw = localStorage.getItem(`${PREFIX}view`)
-      return raw ? JSON.parse(raw) : { range: '1y', normalized: true }
+      if (raw) {
+        const parsed = JSON.parse(raw)
+        return {
+          range: parsed.range || '1y',
+          // 旧版本 stored normalized 字段已废弃，迁移为默认累计收益率
+          chartMode: parsed.chartMode === 'nav' ? 'nav' : 'return',
+        }
+      }
+      return { range: '1y', chartMode: 'return' }
     } catch {
-      return { range: '1y', normalized: true }
+      return { range: '1y', chartMode: 'return' }
     }
   },
   setView(view: ViewState): void {

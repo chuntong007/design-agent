@@ -12,8 +12,8 @@ interface Props {
   onAdd: (fund: { code: string; name: string }) => void
   range: string
   onRangeChange: (r: string) => void
-  normalized: boolean
-  onNormalizedChange: (n: boolean) => void
+  chartMode: 'return' | 'nav'
+  onChartModeChange: (m: 'return' | 'nav') => void
   mainTab: MainTab
   onMainTabChange: (t: MainTab) => void
 }
@@ -29,7 +29,7 @@ const RANGES: { key: RangeKey; label: string }[] = [
   { key: 'all', label: '成立来' },
 ]
 
-export function Header({ funds, onAdd, range, onRangeChange, normalized, onNormalizedChange, mainTab, onMainTabChange }: Props) {
+export function Header({ funds, onAdd, range, onRangeChange, chartMode, onChartModeChange, mainTab, onMainTabChange }: Props) {
   const { palette: p, mode, toggle } = useTheme()
   const styles = makeStyles(p)
   const [keyword, setKeyword] = useState('')
@@ -227,13 +227,13 @@ export function Header({ funds, onAdd, range, onRangeChange, normalized, onNorma
         ))}
       </Box>
 
-      {/* 视图切换 - 紧凑按钮组 */}
+      {/* 视图切换 - 紧凑按钮组：累计收益率(默认) / 绝对净值 */}
       <Box style={{ display: 'flex', gap: '1px', background: p.bg2, borderRadius: '6px', padding: '2px', flexShrink: 0 }}>
         <button
-          onClick={() => onNormalizedChange(true)}
+          onClick={() => onChartModeChange('return')}
           style={{
-            background: normalized ? p.accent : 'transparent',
-            color: normalized ? '#fff' : p.text1,
+            background: chartMode === 'return' ? p.accent : 'transparent',
+            color: chartMode === 'return' ? '#fff' : p.text1,
             border: 'none',
             borderRadius: '4px',
             padding: '5px 10px',
@@ -242,16 +242,16 @@ export function Header({ funds, onAdd, range, onRangeChange, normalized, onNorma
             fontWeight: 500,
             whiteSpace: 'nowrap',
             transition: 'background-color 0.15s ease, color 0.15s ease',
-            boxShadow: normalized ? `0 2px 8px ${p.accent}55` : 'none',
+            boxShadow: chartMode === 'return' ? `0 2px 8px ${p.accent}55` : 'none',
           }}
         >
-          归一化
+          累计收益率
         </button>
         <button
-          onClick={() => onNormalizedChange(false)}
+          onClick={() => onChartModeChange('nav')}
           style={{
-            background: !normalized ? p.accent : 'transparent',
-            color: !normalized ? '#fff' : p.text1,
+            background: chartMode === 'nav' ? p.accent : 'transparent',
+            color: chartMode === 'nav' ? '#fff' : p.text1,
             border: 'none',
             borderRadius: '4px',
             padding: '5px 10px',
@@ -260,7 +260,7 @@ export function Header({ funds, onAdd, range, onRangeChange, normalized, onNorma
             fontWeight: 500,
             whiteSpace: 'nowrap',
             transition: 'background-color 0.15s ease, color 0.15s ease',
-            boxShadow: !normalized ? `0 2px 8px ${p.accent}55` : 'none',
+            boxShadow: chartMode === 'nav' ? `0 2px 8px ${p.accent}55` : 'none',
           }}
         >
           绝对净值

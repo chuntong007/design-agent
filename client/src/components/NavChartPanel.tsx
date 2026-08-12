@@ -2,6 +2,7 @@ import { useMemo, useState, useRef, useEffect } from 'react'
 import {
   ComposedChart,
   Area,
+  Line,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -12,9 +13,19 @@ import {
 } from 'recharts'
 import type { LoadedFund } from '../App'
 import type { AnchorNews } from '../storage'
+import type { GrowthPoint } from '../types'
 import { fmtPct, fmtNum, makeStyles } from '../theme'
 import { useTheme } from '../ThemeContext'
-import { filterByRange, alignSeries, type RangeKey, type AlignedSeries } from '../metrics'
+import {
+  filterByRange,
+  alignSeries,
+  alignReturns,
+  netWorthToReturn,
+  RANGE_TO_DAY,
+  type RangeKey,
+  type AlignedSeries,
+  type GrowthFundInput,
+} from '../metrics'
 import { ErrorBoundary } from './ErrorBoundary'
 
 interface QueryPoint {
@@ -39,10 +50,14 @@ interface TooltipPayload {
   payload?: Record<string, unknown>
 }
 
+const EMPTY = { timestamps: [], dates: [], series: [], chartData: [], benchSeries: [] }
+
 interface Props {
   funds: LoadedFund[]
   range: string
-  normalized: boolean
+  chartMode: 'return' | 'nav'
+  growthMap: Record<string, GrowthPoint[]>
+  growthErrors: Record<string, string>
   anchors: AnchorNews[]
   onPointClick: (date: string, fundCode: string) => void
   newsQuery: { date: string; fundCode: string } | null
@@ -55,7 +70,9 @@ interface Props {
 export function NavChartPanel({
   funds,
   range,
-  normalized,
+  chartMode,
+  growthMap,
+  growthErrors,
   anchors,
   onPointClick,
   newsQuery,
@@ -65,17 +82,51 @@ export function NavChartPanel({
   const { palette: p, mode } = useTheme()
   const [hoveredPoint, setHoveredPoint] = useState<{ date: string; fundCode: string } | null>(null)
 
-  // 对齐多基金净值序列
+  // 蛋卷 growth day 参数随区间切换（年初至今 -> ty）
+  const day = RANGE_TO_DAY[range as RangeKey] ?? 'all'
+
+  // 对齐多基金序列：'return' 用蛋卷累计收益率(随 day 参数区间重定基)，'nav' 用累计净值
   const aligned = useMemo(() => {
     const withData = funds.filter((f) => f.detail && f.detail.netWorth.length > 0)
-    if (withData.length === 0) return { timestamps: [], dates: [], series: [], chartData: [] }
+    if (withData.length === 0) return EMPTY
+
+    if (chartMode === 'return') {
+      const inputs: GrowthFundInput[] = []
+      for (const f of withData) {
+        const key = `${f.code}:${day}`
+        const growth = growthMap[key]
+        if (growth && growth.length > 0) {
+          inputs.push({ code: f.code, name: f.detail!.name, color: f.color, points: growth })
+        } else if (growthErrors[key]) {
+          // 蛋卷失败降级：用累计净值换算区间收益率
+          const nav = filterByRange(f.detail!.netWorth, range as RangeKey)
+          inputs.push({ code: f.code, name: f.detail!.name, color: f.color, points: netWorthToReturn(nav) })
+        }
+        // 加载中：该基金未进入 inputs → 由下方 growthPending 判定显示 loading
+      }
+      if (inputs.length === 0) return EMPTY
+      const alignedData = alignReturns(inputs)
+      // 行格式：{ date, timestamp, [code]: 收益率, [code_bench]: 业绩比较基准 }
+      const chartData = alignedData.timestamps.map((ts, i) => {
+        const row: Record<string, number | string | null> = {
+          date: alignedData.dates[i],
+          timestamp: ts,
+        }
+        for (const s of alignedData.series) row[s.code] = s.values[i]
+        for (const b of alignedData.benchSeries) row[`${b.code}_bench`] = b.values[i]
+        return row
+      })
+      return { ...alignedData, chartData }
+    }
+
+    // 'nav' 模式：绝对净值（累计净值 元）
     const filtered = withData.map((f) => ({
       code: f.code,
       name: f.detail!.name,
       color: f.color,
       netWorth: filterByRange(f.detail!.netWorth, range as RangeKey),
     }))
-    const alignedData = alignSeries(filtered, normalized)
+    const alignedData = alignSeries(filtered, false)
     // 转为 recharts 需要的行格式：[{ date, timestamp, [code1]: val1, [code2]: val2 }]
     const chartData = alignedData.timestamps.map((ts, i) => {
       const row: Record<string, number | string | null> = {
@@ -87,8 +138,8 @@ export function NavChartPanel({
       }
       return row
     })
-    return { ...alignedData, chartData }
-  }, [funds, range, normalized])
+    return { ...alignedData, chartData, benchSeries: [] }
+  }, [funds, range, chartMode, growthMap, growthErrors, day])
 
   // 当前查询点的标记
   const queryPoint = useMemo<QueryPoint | null>(() => {
@@ -113,11 +164,21 @@ export function NavChartPanel({
     return <EmptyState message="添加基金后查看净值走势" />
   }
   const loadingFunds = funds.filter((f) => f.loading)
-  if (loadingFunds.length > 0 && aligned.chartData.length === 0) {
-    return <EmptyState message="正在加载净值数据..." />
+  // 'return' 模式：蛋卷数据加载中判定（未就绪且未失败）
+  const growthPending =
+    chartMode === 'return' &&
+    funds.some(
+      (f) => f.detail && !growthMap[`${f.code}:${day}`] && !growthErrors[`${f.code}:${day}`]
+    )
+  if ((loadingFunds.length > 0 && aligned.chartData.length === 0) || growthPending) {
+    return (
+      <EmptyState
+        message={chartMode === 'return' ? '正在加载累计收益率数据...' : '正在加载净值数据...'}
+      />
+    )
   }
   if (aligned.chartData.length === 0) {
-    return <EmptyState message="暂无净值数据" />
+    return <EmptyState message="暂无数据" />
   }
 
   // 点击图表:优先从 activePayload 获取点击的基金 dataKey,否则 fallback 到 funds[0]
@@ -130,9 +191,10 @@ export function NavChartPanel({
     }
     const date = state.activeLabel as string
     let fundCode = ''
-    // 从 activePayload 找到点击的数据系列(dataKey 即基金 code)
+    // 从 activePayload 找到点击的数据系列(dataKey 即基金 code)，跳过基准虚线(_bench)
     if (state.activePayload && state.activePayload.length > 0) {
-      fundCode = state.activePayload[0].dataKey as string
+      const p = state.activePayload.find((x) => !String(x.dataKey).endsWith('_bench'))
+      if (p) fundCode = p.dataKey as string
     }
     // fallback:无法确定时用 funds[0]
     if (!fundCode || !funds.some((f) => f.code === fundCode)) {
@@ -146,9 +208,14 @@ export function NavChartPanel({
       <style>{`@keyframes highlight-pulse { 0%, 100% { stroke-opacity: 0.4; } 50% { stroke-opacity: 0.9; } }`}</style>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
         <div>
-          <span style={{ fontSize: '16px', fontWeight: 700, color: p.text0, letterSpacing: '-0.01em' }}>净值走势</span>
+          <span style={{ fontSize: '16px', fontWeight: 700, color: p.text0, letterSpacing: '-0.01em' }}>
+            {chartMode === 'return' ? '累计收益率走势' : '净值走势'}
+          </span>
           <span style={{ fontSize: '12px', color: p.text2, marginLeft: '10px' }}>
-            {normalized ? '归一化（首日=0%）' : '绝对净值（元）'} · 点击曲线任意点位检索新闻
+            {chartMode === 'return'
+              ? '累计收益率（蛋卷口径·随区间重定基）· 虚线=业绩比较基准'
+              : '绝对净值（元）'}{' '}
+            · 点击曲线任意点位检索新闻
           </span>
         </div>
       </div>
@@ -173,12 +240,14 @@ export function NavChartPanel({
               stroke={p.text2}
               tick={{ fontSize: 11, fill: p.text2 }}
               domain={['auto', 'auto']}
-              tickFormatter={(v) => (normalized ? `${v.toFixed(1)}%` : v.toFixed(2))}
+              tickFormatter={(v) => (chartMode === 'return' ? `${v.toFixed(1)}%` : v.toFixed(2))}
             />
-            <Tooltip content={<CustomTooltip funds={funds} normalized={normalized} />} />
+            <Tooltip content={<CustomTooltip funds={funds} chartMode={chartMode} />} />
             <Legend
               wrapperStyle={{ fontSize: 12, paddingTop: 8 }}
               formatter={(value) => {
+                // 基准虚线不进入图例
+                if (String(value).endsWith('_bench')) return null
                 const f = funds.find((x) => x.code === value)
                 const name = f ? f.detail?.name || value : value
                 return (
@@ -223,6 +292,27 @@ export function NavChartPanel({
                   connectNulls
                 />
               ))}
+            {/* 'return' 模式：每基金叠加业绩比较基准虚线（不占图例，点击时跳过） */}
+            {chartMode === 'return' &&
+              funds
+                .filter((f) => f.detail)
+                .map((f) => (
+                  <Line
+                    key={`${f.code}_bench`}
+                    type="monotone"
+                    dataKey={`${f.code}_bench`}
+                    stroke={f.color}
+                    strokeOpacity={0.45}
+                    strokeWidth={1.2}
+                    strokeDasharray="4 3"
+                    dot={false}
+                    activeDot={false}
+                    legendType="none"
+                    isAnimationActive
+                    animationDuration={600}
+                    connectNulls
+                  />
+                ))}
             {/* 用 Customized 安全渲染锚点标注：只有 xAxis/yAxis scale 就绪时才渲染 */}
             <Customized component={(props: CustomizedProps) => <AnchorMarks {...props} funds={funds} aligned={aligned} anchors={anchors} queryPoint={queryPoint} palette={p} highlightDate={highlightDate} />} />
           </ComposedChart>
@@ -269,13 +359,17 @@ interface TooltipProps {
   payload?: TooltipPayload[]
   label?: string
   funds: LoadedFund[]
-  normalized: boolean
+  chartMode: 'return' | 'nav'
 }
 
-function CustomTooltip({ active, payload, label, funds, normalized }: TooltipProps) {
+function CustomTooltip({ active, payload, label, funds, chartMode }: TooltipProps) {
   const { palette: p } = useTheme()
   if (!active || !payload || payload.length === 0) return null
-  const sorted = [...payload].sort((a, b) => (b.value ?? 0) - (a.value ?? 0))
+  // 分离主曲线(基金)与基准虚线(_bench)
+  const main = payload
+    .filter((pp) => !String(pp.dataKey).endsWith('_bench'))
+    .sort((a, b) => (b.value ?? 0) - (a.value ?? 0))
+  const benches = payload.filter((pp) => String(pp.dataKey).endsWith('_bench'))
   return (
     <div
       style={{
@@ -285,12 +379,13 @@ function CustomTooltip({ active, payload, label, funds, normalized }: TooltipPro
         padding: '10px 12px',
         fontSize: '12px',
         boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
-        maxWidth: '320px',
+        maxWidth: '360px',
       }}
     >
       <div style={{ color: p.text1, marginBottom: '6px', fontWeight: 600 }}>{label}</div>
-      {sorted.map((pp) => {
+      {main.map((pp) => {
         const f = funds.find((x) => x.code === pp.dataKey)
+        const bench = benches.find((b) => String(b.dataKey) === `${pp.dataKey}_bench`)
         return (
           <div key={pp.dataKey} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '3px' }}>
             <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: pp.color }} />
@@ -298,8 +393,13 @@ function CustomTooltip({ active, payload, label, funds, normalized }: TooltipPro
               {f?.detail?.name || pp.dataKey}
             </span>
             <span style={{ color: p.text0, fontFamily: '"JetBrains Mono", monospace', fontWeight: 600 }}>
-              {normalized ? `${pp.value?.toFixed(2)}%` : fmtNum(pp.value, 4)}
+              {chartMode === 'return' ? `${pp.value?.toFixed(2)}%` : fmtNum(pp.value, 4)}
             </span>
+            {bench && chartMode === 'return' && (
+              <span style={{ color: p.text2, fontFamily: '"JetBrains Mono", monospace', fontSize: '11px' }}>
+                基准 {bench.value?.toFixed(2)}%
+              </span>
+            )}
           </div>
         )
       })}

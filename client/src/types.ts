@@ -80,6 +80,13 @@ export interface ApiResult<T> {
 }
 
 // ===== AI 新闻分析会话（多检索历史，运行时状态，不持久化）=====
+export interface PerFundImpact {
+  code: string
+  name: string
+  impact: 'positive' | 'negative' | 'neutral'
+  reason: string
+}
+
 export interface NewsSession {
   id: string // 会话唯一 ID（date-fundCode-timestamp）
   date: string // 检索日期 YYYY-MM-DD
@@ -94,6 +101,14 @@ export interface NewsSession {
   error: string
   status: { stage: string; message: string } | null
   createdAt: number
+  // 多基金同步检索标识(同时为多支基金创建会话时为 true), 头部徽章据此显示
+  isMultiFundSession?: boolean
+  // 多基金批次 ID: 同批次创建的会话共享此 ID, 便于整批取消/重建
+  batchId?: string
+  // 【多基金综合研判】目标基金代码列表(单基金检索时为 [fundCode])
+  targetFundCodes?: string[]
+  // 逐基金影响判断(从 LLM 输出解析, 可选)
+  perFundImpact?: PerFundImpact[]
 }
 
 // ===== 回测相关类型 =====

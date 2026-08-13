@@ -21,7 +21,7 @@ import {
   Tooltip,
 } from '@mantine/core'
 import { DatePickerInput } from '@mantine/dates'
-import { Play, Info, TrendingUp, TrendingDown, Activity, Target } from 'lucide-react'
+import { Play, Info, TrendingUp, TrendingDown, Activity, Target, RotateCcw } from 'lucide-react'
 import {
   ComposedChart,
   Line,
@@ -216,6 +216,32 @@ export function BacktestPanel({ funds, range, onRangeChange }: Props) {
     [strategies, strategyKey]
   )
 
+  // ===== 防御性补齐：切换策略时，仅填充缺失参数，绝不覆盖已有值 =====
+  useEffect(() => {
+    if (!selectedStrategy) return
+    setParamValues((prev) => {
+      let changed = false
+      const merged = { ...prev }
+      for (const p of selectedStrategy.params) {
+        if (merged[p.name] === undefined) {
+          merged[p.name] = p.default
+          changed = true
+        }
+      }
+      return changed ? merged : prev
+    })
+  }, [selectedStrategy?.key])
+
+  // ===== 恢复默认：仅重置当前策略的 params 字段，不影响 initialCapital =====
+  const resetStrategyParams = () => {
+    if (!selectedStrategy) return
+    const defaults: Record<string, number> = {}
+    for (const p of selectedStrategy.params) {
+      defaults[p.name] = p.default
+    }
+    setParamValues((prev) => ({ ...prev, ...defaults }))
+  }
+
   const startDate = dateRange[0] ? dayjs(dateRange[0]).format('YYYY-MM-DD') : ''
   const endDate = dateRange[1] ? dayjs(dateRange[1]).format('YYYY-MM-DD') : ''
 
@@ -384,8 +410,15 @@ export function BacktestPanel({ funds, range, onRangeChange }: Props) {
                 </Text>
                 <NumberInput
                   value={initialCapital}
-                  onChange={(v) => setInitialCapital(typeof v === 'number' ? v : 0)}
-                  min={1000}
+                  onChange={(v) => {
+                    if (typeof v === 'number') setInitialCapital(v)
+                  }}
+                  onBlur={() => {
+                    if (typeof initialCapital !== 'number' || Number.isNaN(initialCapital) || initialCapital < 1000) {
+                      setInitialCapital(100000)
+                    }
+                  }}
+                  min={1}
                   step={10000}
                   radius="md"
                   thousandSeparator=","
@@ -480,6 +513,17 @@ export function BacktestPanel({ funds, range, onRangeChange }: Props) {
               {selectedStrategy && selectedStrategy.params.length > 0 && (
                 <>
                   <Divider label="策略参数" labelPosition="center" />
+                  <Group justify="flex-end">
+                    <Button
+                      variant="light"
+                      color="gray"
+                      size="xs"
+                      leftSection={<RotateCcw size={14} />}
+                      onClick={resetStrategyParams}
+                    >
+                      恢复默认
+                    </Button>
+                  </Group>
                   <Stack gap="sm">
                     {selectedStrategy.params.map((param) => (
                       <StrategyParamInput
@@ -519,15 +563,21 @@ export function BacktestPanel({ funds, range, onRangeChange }: Props) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, height: '100%', overflow: 'hidden' }}>
           {result && result.metrics ? (
             <>
-              {/* 超额收益高亮 + 指标卡片 */}
-              <Card className={glassClass} radius={cardRadius} p="lg" withBorder>
-                <Group justify="space-between" align="flex-start" mb="md">
+              {/* Card 1: RingProgress 单独 Card，固定最小高度 220px，防止被压截断 */}
+              <Card
+                className={glassClass}
+                radius={cardRadius}
+                p="md"
+                withBorder
+                style={{ minHeight: 220, flexShrink: 0 }}
+              >
+                <Group justify="space-between" align="center" mb="sm">
                   <Box>
                     <Text size="xs" c={mode === 'dark' ? 'gray.4' : 'gray.6'}>
                       回测结果 · {selectedStrategy?.name} · {selectedFund?.name}
                     </Text>
-                    <Text size="xl" fw={800} c={mode === 'dark' ? 'gray.0' : 'dark.9'} mt={2}>
-                      资产曲线分析
+                    <Text size="sm" fw={700} c={mode === 'dark' ? 'gray.1' : 'dark.8'}>
+                      风险调整后收益
                     </Text>
                   </Box>
                   <ExcessReturnBadge
@@ -535,93 +585,128 @@ export function BacktestPanel({ funds, range, onRangeChange }: Props) {
                     palette={p}
                   />
                 </Group>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '180px 1fr', gap: 16, alignItems: 'center' }}>
-                  {/* 夏普比率环形图 */}
-                  <Stack align="center" gap={4}>
-                    <RingProgress
-                      size={140}
-                      thickness={10}
-                      roundCaps
-                      sections={[
-                        {
-                          value: Math.min(Math.max((result.metrics.sharpe + 1) * 33.3, 0), 100),
-                          color: result.metrics.sharpe >= 1 ? 'green' : result.metrics.sharpe >= 0 ? 'blue' : 'red',
-                        },
-                      ]}
-                      label={
-                        <Stack align="center" gap={0}>
-                          <Text size="xs" c={mode === 'dark' ? 'gray.4' : 'gray.6'}>
-                            夏普比率
-                          </Text>
-                          <Text size="lg" fw={800} c={mode === 'dark' ? 'gray.0' : 'dark.9'}>
-                            {result.metrics.sharpe.toFixed(2)}
-                          </Text>
-                        </Stack>
-                      }
-                    />
-                    <Text size="xs" c={mode === 'dark' ? 'gray.5' : 'gray.5'}>
-                      风险调整后收益
+                <Group gap="lg" align="center" wrap="nowrap">
+                  <RingProgress
+                    size={150}
+                    thickness={11}
+                    roundCaps
+                    sections={[
+                      {
+                        value: Math.min(Math.max((result.metrics.sharpe + 1) * 33.3, 0), 100),
+                        color: result.metrics.sharpe >= 1 ? 'green' : result.metrics.sharpe >= 0 ? 'blue' : 'red',
+                      },
+                    ]}
+                    label={
+                      <Stack align="center" gap={0}>
+                        <Text size="xs" c={mode === 'dark' ? 'gray.4' : 'gray.6'}>
+                          夏普比率
+                        </Text>
+                        <Text size="md" fw={800} c={mode === 'dark' ? 'gray.0' : 'dark.9'}>
+                          {result.metrics.sharpe.toFixed(2)}
+                        </Text>
+                      </Stack>
+                    }
+                  />
+                  <Stack gap={4} style={{ flex: 1 }}>
+                    <Group gap="xs">
+                      <Text size="xs" c={p.text2}>评级:</Text>
+                      <Badge
+                        size="sm"
+                        color={
+                          result.metrics.sharpe >= 2
+                            ? 'green'
+                            : result.metrics.sharpe >= 1
+                              ? 'blue'
+                              : result.metrics.sharpe >= 0
+                                ? 'yellow'
+                                : 'red'
+                        }
+                      >
+                        {result.metrics.sharpe >= 2
+                          ? '优秀'
+                          : result.metrics.sharpe >= 1
+                            ? '良好'
+                            : result.metrics.sharpe >= 0
+                              ? '一般'
+                              : '差'}
+                      </Badge>
+                    </Group>
+                    <Text size="xs" c={p.text2}>
+                      夏普比率 = (策略收益 - 无风险利率) / 策略波动率
+                    </Text>
+                    <Text size="xs" c={p.text2}>
+                      参考: &lt;0 差 · 0~1 一般 · 1~2 良好 · &gt;2 优秀
                     </Text>
                   </Stack>
+                </Group>
+              </Card>
 
-                  {/* 关键指标网格 */}
-                  <div
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: 'repeat(4, 1fr)',
-                      gap: 10,
-                    }}
-                  >
-                    <MetricCell
-                      label="总收益率"
-                      value={fmtPct(result.metrics.totalReturn)}
-                      color={result.metrics.totalReturn >= 0 ? p.up : p.down}
-                      icon={result.metrics.totalReturn >= 0 ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
-                    />
-                    <MetricCell
-                      label="年化收益"
-                      value={fmtPct(result.metrics.annualReturn)}
-                      color={result.metrics.annualReturn >= 0 ? p.up : p.down}
-                    />
-                    <MetricCell
-                      label="基准收益"
-                      value={fmtPct(result.metrics.benchmarkReturn)}
-                      color={result.metrics.benchmarkReturn >= 0 ? p.up : p.down}
-                    />
-                    <MetricCell
-                      label="期末资产"
-                      value={fmtNum(result.metrics.finalValue, 0)}
-                      color={p.text0}
-                    />
-                    <MetricCell
-                      label="交易次数"
-                      value={String(result.metrics.tradeCount)}
-                      color={p.text0}
-                    />
-                    <MetricCell
-                      label="胜率"
-                      value={`${result.metrics.winRate.toFixed(0)}%`}
-                      color={p.text0}
-                    />
-                    <MetricCell
-                      label="最大回撤"
-                      value={fmtPct(result.metrics.maxDrawdown)}
-                      color={p.impactNegative}
-                    />
-                    <MetricCell
-                      label="超额收益"
-                      value={fmtPct(result.metrics.totalReturn - result.metrics.benchmarkReturn)}
-                      color={
-                        result.metrics.totalReturn - result.metrics.benchmarkReturn >= 0
-                          ? p.up
-                          : p.down
-                      }
-                    />
-                  </div>
+              {/* Card 2: 8 个关键指标 grid */}
+              <Card
+                className={glassClass}
+                radius={cardRadius}
+                p="md"
+                withBorder
+                style={{ flexShrink: 0 }}
+              >
+                <Text size="sm" fw={700} mb="sm" c={mode === 'dark' ? 'gray.1' : 'dark.8'}>
+                  关键指标
+                </Text>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
+                  <MetricCell
+                    label="总收益率"
+                    value={fmtPct(result.metrics.totalReturn)}
+                    color={result.metrics.totalReturn >= 0 ? p.up : p.down}
+                    icon={
+                      result.metrics.totalReturn >= 0 ? (
+                        <TrendingUp size={14} />
+                      ) : (
+                        <TrendingDown size={14} />
+                      )
+                    }
+                  />
+                  <MetricCell
+                    label="年化收益"
+                    value={fmtPct(result.metrics.annualReturn)}
+                    color={result.metrics.annualReturn >= 0 ? p.up : p.down}
+                  />
+                  <MetricCell
+                    label="基准收益"
+                    value={fmtPct(result.metrics.benchmarkReturn)}
+                    color={result.metrics.benchmarkReturn >= 0 ? p.up : p.down}
+                  />
+                  <MetricCell
+                    label="期末资产"
+                    value={fmtNum(result.metrics.finalValue, 0)}
+                    color={p.text0}
+                  />
+                  <MetricCell
+                    label="交易次数"
+                    value={String(result.metrics.tradeCount)}
+                    color={p.text0}
+                  />
+                  <MetricCell
+                    label="胜率"
+                    value={`${result.metrics.winRate.toFixed(0)}%`}
+                    color={p.text0}
+                  />
+                  <MetricCell
+                    label="最大回撤"
+                    value={fmtPct(result.metrics.maxDrawdown)}
+                    color={p.impactNegative}
+                  />
+                  <MetricCell
+                    label="超额收益"
+                    value={fmtPct(result.metrics.totalReturn - result.metrics.benchmarkReturn)}
+                    color={
+                      result.metrics.totalReturn - result.metrics.benchmarkReturn >= 0
+                        ? p.up
+                        : p.down
+                    }
+                  />
                 </div>
 
-                {/* 回撤条 */}
+                {/* 回撤条移到 Card 2 末尾 */}
                 <Group mt="md" gap="sm" align="center">
                   <Text size="xs" c={mode === 'dark' ? 'gray.4' : 'gray.6'} style={{ minWidth: 80 }}>
                     最大回撤
@@ -646,7 +731,13 @@ export function BacktestPanel({ funds, range, onRangeChange }: Props) {
                 radius={cardRadius}
                 p="lg"
                 withBorder
-                style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+                style={{
+                  flex: 1,
+                  minHeight: 320,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  overflow: 'hidden',
+                }}
               >
                 <Group justify="space-between" mb="sm">
                   <Box>
@@ -833,7 +924,20 @@ function StrategyParamInput({
       </Box>
       <NumberInput
         value={value}
-        onChange={(v) => onChange(typeof v === 'number' ? v : param.default)}
+        onChange={(v) => {
+          // 输入过程中（如清空、键入中间状态）v 不是 number，
+          // 此时不写入 state，让 NumberInput 内部保留原始字符串，
+          // 避免把用户改了一半的值静默回退到 param.default。
+          if (typeof v === 'number') {
+            onChange(v)
+          }
+        }}
+        onBlur={() => {
+          // 焦点离开时若值为 NaN/缺失，补回默认值
+          if (typeof value !== 'number' || Number.isNaN(value)) {
+            onChange(param.default)
+          }
+        }}
         min={param.min}
         max={param.max}
         step={param.max > 100 ? 10 : 1}

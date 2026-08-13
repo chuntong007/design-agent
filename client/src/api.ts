@@ -66,13 +66,15 @@ export type NewsStreamEvent =
 // 流式新闻检索：消费 SSE，通过回调实时推送事件
 // 返回 AbortController 用于取消请求
 // 注意：SSE 请求直连后端 8787 端口，绕过 Vite 代理（代理会缓冲 SSE）
+// 【多基金综合研判】fundCodes 数组: 1 支 = 单基金检索, N 支 = 多基金综合研判
 export function searchNewsStream(
   date: string,
-  fundCode: string | undefined,
+  fundCodes: string[],
   onEvent: (evt: NewsStreamEvent) => void
 ): AbortController {
   const controller = new AbortController()
-  const path = `/news/search/stream?date=${encodeURIComponent(date)}${fundCode ? `&fundCode=${encodeURIComponent(fundCode)}` : ''}`
+  const codes = fundCodes.join(',')
+  const path = `/news/search/stream?date=${encodeURIComponent(date)}&fundCodes=${encodeURIComponent(codes)}`
   // 直连后端：开发环境用 8787，生产环境用同源（由反向代理处理）
   const streamBase = import.meta.env.DEV ? 'http://localhost:8787/api' : BASE
 
@@ -136,6 +138,15 @@ export function searchNewsStream(
   })()
 
   return controller
+}
+
+// 旧签名重载(临时,后端部署后移除): 内部转换为新签名, 调用方无需修改
+export function searchNewsStreamLegacy(
+  date: string,
+  fundCode: string | undefined,
+  onEvent: (evt: NewsStreamEvent) => void
+): AbortController {
+  return searchNewsStream(date, fundCode ? [fundCode] : [], onEvent)
 }
 
 export const api = {

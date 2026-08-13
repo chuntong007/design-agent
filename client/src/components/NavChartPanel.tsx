@@ -1,4 +1,4 @@
-import { useMemo, useState, useRef, useEffect } from 'react'
+import { useMemo, useState, useRef, useEffect, useCallback } from 'react'
 import {
   ComposedChart,
   Area,
@@ -11,6 +11,7 @@ import {
   Legend,
   Customized,
 } from 'recharts'
+import { Modal, Button } from '@mantine/core'
 import type { LoadedFund } from '../App'
 import type { AnchorNews } from '../storage'
 import type { GrowthPoint } from '../types'
@@ -27,6 +28,7 @@ import {
   type GrowthFundInput,
 } from '../metrics'
 import { ErrorBoundary } from './ErrorBoundary'
+import { NewsTimeline } from './NewsTimeline'
 
 interface QueryPoint {
   ts: number
@@ -59,12 +61,31 @@ interface Props {
   growthMap: Record<string, GrowthPoint[]>
   growthErrors: Record<string, string>
   anchors: AnchorNews[]
-  onPointClick: (date: string, fundCode: string) => void
+  // e 形参保留兼容(忽略),内部不再透传 modifier
+  onPointClick: (date: string, fundCode: string, e?: React.MouseEvent | React.KeyboardEvent | 'shift' | 'alt') => void
+  // 【多基金检索】预设的检索基金子集;空选/未传 = 兜底为全部已加载基金
+  newsTargetCodes?: string[]
   newsQuery: { date: string; fundCode: string } | null
   // 报告日期联动高亮（点击报告日期标签时，图表对应点位闪烁高亮）
   highlightDate?: string | null
   // 点击图表空白处回调（抽屉打开时用于关闭抽屉）
   onChartBlankClick?: () => void
+  // 【NewsTimeline】单击圆点：跳转到该日期的图表高亮
+  onJumpToAnchor?: (date: string, anchorId: string) => void
+  // 【NewsTimeline】删除锚点
+  onRemoveAnchor?: (anchorId: string) => void
+  // 【NewsTimeline】范围滑块变化
+  onRangeChange?: (start: string, end: string) => void
+  // 【NewsTimeline】列表模式（透传）
+  listMode?: boolean
+  // 【NewsTimeline】切换列表/时间轴模式
+  onToggleListMode?: () => void
+  // 【NewsTimeline】清空全部锚点
+  onClearAllAnchors?: () => void
+  // 【NewsTimeline】全部清空确认弹窗开关
+  clearAllConfirmOpen?: boolean
+  // 【NewsTimeline】全部清空确认弹窗开关变更
+  onClearAllConfirmOpenChange?: (open: boolean) => void
 }
 
 export function NavChartPanel({
@@ -75,9 +96,18 @@ export function NavChartPanel({
   growthErrors,
   anchors,
   onPointClick,
+  newsTargetCodes,
   newsQuery,
   highlightDate,
   onChartBlankClick,
+  onJumpToAnchor,
+  onRemoveAnchor,
+  onRangeChange,
+  listMode,
+  onToggleListMode,
+  onClearAllAnchors,
+  clearAllConfirmOpen,
+  onClearAllConfirmOpenChange,
 }: Props) {
   const { palette: p, mode } = useTheme()
   const [hoveredPoint, setHoveredPoint] = useState<{ date: string; fundCode: string } | null>(null)
@@ -160,6 +190,22 @@ export function NavChartPanel({
     return closest
   }, [newsQuery, funds, aligned])
 
+  // 【NewsTimeline】从 Recharts Customized 提取 xScale(date) -> pixel
+  // 用 ref 而不是 state：避免每次 Recharts 重渲染时触发 NavChartPanel 重渲染
+  const xScaleRef = useRef<((d: string) => number) | null>(null)
+  const onXScaleReady = useCallback((scale: (d: string) => number) => {
+    xScaleRef.current = scale
+  }, [])
+
+  // 视觉高亮判定:目标子集不全时,非目标基金淡化(自动,无需手动锁定)
+  const isTargetSubSet =
+    newsTargetCodes != null && newsTargetCodes.length > 0 && newsTargetCodes.length < funds.length
+  // 已选基金集合(无 newsTargetCodes 时视为全部 = 不淡化)
+  const targetCodeSet = useMemo(
+    () => (isTargetSubSet ? new Set(newsTargetCodes!) : null),
+    [isTargetSubSet, newsTargetCodes]
+  )
+
   if (funds.length === 0) {
     return <EmptyState message="添加基金后查看净值走势" />
   }
@@ -183,7 +229,8 @@ export function NavChartPanel({
 
   // 点击图表:优先从 activePayload 获取点击的基金 dataKey,否则 fallback 到 funds[0]
   // 点空白（无 activeLabel）时触发 onChartBlankClick（抽屉打开时关闭抽屉）
-  const handleClick = (state: ClickEventState) => {
+  // 修饰键: Shift = 仅检索该点对应基金, Alt = 锁定到该基金后再检索
+  const handleClick = (state: ClickEventState, e?: React.MouseEvent) => {
     if (!state || !state.activeLabel) {
       // 点空白：若提供了 onChartBlankClick 则触发
       if (onChartBlankClick) onChartBlankClick()
@@ -200,7 +247,9 @@ export function NavChartPanel({
     if (!fundCode || !funds.some((f) => f.code === fundCode)) {
       fundCode = funds[0]?.code || ''
     }
-    if (fundCode) onPointClick(date, fundCode)
+    if (!fundCode) return
+    // 单源决策由 App.tsx 内的 newsTargetCodes 完成;此处仅透传点击事件
+    onPointClick(date, fundCode)
   }
 
   return (
@@ -250,12 +299,15 @@ export function NavChartPanel({
                 if (String(value).endsWith('_bench')) return null
                 const f = funds.find((x) => x.code === value)
                 const name = f ? f.detail?.name || value : value
+                const isInTarget = targetCodeSet == null || targetCodeSet.has(value as string)
                 return (
                   <span
                     style={{
-                      color: p.text1,
-                      textShadow: mode === 'dark' ? `0 0 8px ${p.accent}66` : 'none',
+                      color: isInTarget ? p.text0 : p.text2,
+                      fontWeight: isInTarget ? 500 : 400,
+                      cursor: 'default',
                     }}
+                    title={isInTarget ? '在检索组合中' : '不在检索组合中(显示为参考)'}
                   >
                     {name}
                   </span>
@@ -275,80 +327,98 @@ export function NavChartPanel({
             </defs>
             {funds
               .filter((f) => f.detail)
-              .map((f) => (
-                <Area
-                  key={f.code}
-                  type="monotone"
-                  dataKey={f.code}
-                  stroke={f.color}
-                  strokeWidth={2}
-                  fill={`url(#grad-${f.code})`}
-                  fillOpacity={1}
-                  dot={false}
-                  activeDot={{ r: 4, fill: f.color, stroke: p.bg0, strokeWidth: 2 }}
-                  isAnimationActive
-                  animationDuration={600}
-                  animationEasing="ease-out"
-                  connectNulls
-                />
-              ))}
+              .map((f) => {
+                const isInTarget = targetCodeSet == null || targetCodeSet.has(f.code)
+                const isOther = targetCodeSet != null && !targetCodeSet.has(f.code)
+                return (
+                  <Area
+                    key={f.code}
+                    type="monotone"
+                    dataKey={f.code}
+                    stroke={f.color}
+                    strokeWidth={isInTarget ? 2 : 1.2}
+                    strokeOpacity={isOther ? 0.3 : 1}
+                    fill={`url(#grad-${f.code})`}
+                    fillOpacity={isOther ? 0.3 : 1}
+                    dot={false}
+                    activeDot={{
+                      r: isInTarget ? 4 : 2,
+                      fill: f.color,
+                      stroke: p.bg0,
+                      strokeWidth: 2,
+                    }}
+                    isAnimationActive
+                    animationDuration={600}
+                    animationEasing="ease-out"
+                    connectNulls
+                  />
+                )
+              })}
             {/* 'return' 模式：每基金叠加业绩比较基准虚线（不占图例，点击时跳过） */}
             {chartMode === 'return' &&
               funds
                 .filter((f) => f.detail)
-                .map((f) => (
-                  <Line
-                    key={`${f.code}_bench`}
-                    type="monotone"
-                    dataKey={`${f.code}_bench`}
-                    stroke={f.color}
-                    strokeOpacity={0.45}
-                    strokeWidth={1.2}
-                    strokeDasharray="4 3"
-                    dot={false}
-                    activeDot={false}
-                    legendType="none"
-                    isAnimationActive
-                    animationDuration={600}
-                    connectNulls
-                  />
-                ))}
+                .map((f) => {
+                  const isOther = targetCodeSet != null && !targetCodeSet.has(f.code)
+                  return (
+                    <Line
+                      key={`${f.code}_bench`}
+                      type="monotone"
+                      dataKey={`${f.code}_bench`}
+                      stroke={f.color}
+                      strokeOpacity={isOther ? 0.15 : 0.45}
+                      strokeWidth={1.2}
+                      strokeDasharray="4 3"
+                      dot={false}
+                      activeDot={false}
+                      legendType="none"
+                      isAnimationActive
+                      animationDuration={600}
+                      connectNulls
+                    />
+                  )
+                })}
             {/* 用 Customized 安全渲染锚点标注：只有 xAxis/yAxis scale 就绪时才渲染 */}
-            <Customized component={(props: CustomizedProps) => <AnchorMarks {...props} funds={funds} aligned={aligned} anchors={anchors} queryPoint={queryPoint} palette={p} highlightDate={highlightDate} />} />
+            <Customized component={(props: CustomizedProps) => <AnchorMarks {...props} funds={funds} aligned={aligned} anchors={anchors} queryPoint={queryPoint} palette={p} highlightDate={highlightDate} onXScaleReady={onXScaleReady} />} />
           </ComposedChart>
         </ResponsiveContainer>
         </ErrorBoundary>
       </div>
-      {/* 锚定新闻标签条：直接显示在图表下方，所见即所得 */}
-      {anchors.length > 0 && (
-        <div style={{ display: 'flex', gap: '6px', marginTop: '8px', overflowX: 'auto', paddingBottom: '4px' }}>
-          {anchors.map((a) => {
-            const color = a.impact === 'positive' ? p.up : a.impact === 'negative' ? p.down : p.neutral
-            return (
-              <div
-                key={a.id}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '4px 8px',
-                  borderRadius: '4px',
-                  background: p.bg2,
-                  border: `1px solid ${color}66`,
-                  borderLeft: `3px solid ${color}`,
-                  fontSize: '11px',
-                  whiteSpace: 'nowrap',
-                  flexShrink: 0,
-                }}
-              >
-                <span style={{ color: p.text2, fontFamily: 'monospace' }}>{a.date}</span>
-                <span style={{ color: p.text1, maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {a.title.length > 24 ? a.title.slice(0, 24) + '…' : a.title}
-                </span>
-              </div>
-            )
-          })}
-        </div>
+      {/* 锚定新闻时间线：与图表 x 轴对齐，悬停/单击/拖动滑块均可交互 */}
+      <NewsTimeline
+        anchors={anchors}
+        xStart={aligned.dates[0] || ''}
+        xEnd={aligned.dates[aligned.dates.length - 1] || ''}
+        xScale={xScaleRef.current ?? undefined}
+        onJumpTo={onJumpToAnchor}
+        onRemove={onRemoveAnchor}
+        onRangeChange={onRangeChange}
+        listMode={listMode}
+        onToggleListMode={onToggleListMode}
+        onClearAllAnchors={onClearAllAnchors}
+        anchorsCount={anchors.length}
+      />
+      {/* 全部清空确认 Modal：由 NavChartPanel 持有弹窗状态(以正确显示锚点数量) */}
+      {onClearAllAnchors && (
+        <Modal
+          opened={!!clearAllConfirmOpen}
+          onClose={() => onClearAllConfirmOpenChange?.(false)}
+          title="确认清空所有锚点"
+          centered
+          size="sm"
+        >
+          <p style={{ fontSize: 13, color: p.text1, margin: '0 0 16px 0' }}>
+            此操作将清除全部已锚定的 AI 分析报告(<b>{anchors.length}</b> 条),且不可撤销。是否继续?
+          </p>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <Button variant="subtle" size="sm" onClick={() => onClearAllConfirmOpenChange?.(false)}>
+              取消
+            </Button>
+            <Button color="red" size="sm" onClick={onClearAllAnchors}>
+              确认清空
+            </Button>
+          </div>
+        </Modal>
       )}
     </div>
   )
@@ -451,10 +521,12 @@ interface AnchorMarksProps extends CustomizedProps {
   queryPoint: QueryPoint | null
   palette: ReturnType<typeof useTheme>['palette']
   highlightDate?: string | null
+  // 把 Recharts 的 xAxis.scale 提升到 NavChartPanel 顶层，供 NewsTimeline 使用
+  onXScaleReady?: (scale: (d: string) => number) => void
 }
 
 function AnchorMarks(props: AnchorMarksProps) {
-  const { xAxisMap, yAxisMap, funds, aligned, anchors, queryPoint, palette: p, highlightDate } = props
+  const { xAxisMap, yAxisMap, funds, aligned, anchors, queryPoint, palette: p, highlightDate, onXScaleReady } = props
   // funds 保留在 props 中以便未来扩展(如按基金颜色区分锚点)
   void funds
   if (!xAxisMap || !yAxisMap) return null
@@ -464,6 +536,8 @@ function AnchorMarks(props: AnchorMarksProps) {
 
   const yScale = yAxis.scale
   const xScale = xAxis.scale
+  // 把 xScale 提升到 NavChartPanel 顶层，使 NewsTimeline 可以像素级对齐图表
+  if (onXScaleReady) onXScaleReady(xScale as (d: string) => number)
   const yRange: [number, number] = (yScale && typeof yScale.range === 'function') ? yScale.range() : [0, 0]
   const elements: React.ReactNode[] = []
 
@@ -522,11 +596,12 @@ function AnchorMarks(props: AnchorMarksProps) {
     elements.push(
       <line key={`${a.id}-line`} x1={x} y1={yRange[0]} x2={x} y2={yRange[1]} stroke={color} strokeOpacity={0.5} strokeDasharray="3 3" />
     )
-    // 圆点：有有效净值才画，旁边加 title 文字(前20字符)
+    // 圆点：有有效净值才画，旁边加 title 文字(优先用 summary，截断到 20 字符)
     if (val !== null) {
       const y = yScale!(val)
       if (isFinite(y)) {
-        const shortTitle = a.title.length > 20 ? a.title.slice(0, 20) + '…' : a.title
+        const baseText = a.summary || a.title
+        const shortTitle = baseText.length > 20 ? baseText.slice(0, 20) + '…' : baseText
         elements.push(
           <circle key={`${a.id}-dot`} cx={x} cy={y} r={5} fill={color} stroke={p.bg0} strokeWidth={2} />,
           <text key={`${a.id}-label`} x={x + 8} y={y - 8} fontSize={10} fill={p.text1} fontFamily="JetBrains Mono, monospace">

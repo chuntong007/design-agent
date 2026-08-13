@@ -102,7 +102,7 @@ export const STRATEGY_INFO: StrategyInfo[] = [
     params: [
       { name: 'stopProfit', label: '止盈比例(%)', default: 20, min: 1, max: 100, desc: '盈利达到该比例卖出' },
       { name: 'stopLoss', label: '止损比例(%)', default: 10, min: 1, max: 50, desc: '亏损达到该比例卖出' },
-      { name: 'buyAmount', label: '单次建仓金额', default: 100000, min: 1000, max: 10000000, desc: '每次建仓投入金额' }
+      { name: 'buyAmount', label: '单次建仓金额', default: 100000, min: 100, max: 10000000, desc: '每次建仓投入金额(下限 100 元,允许 500/800 等小额试仓)' }
     ]
   },
   {

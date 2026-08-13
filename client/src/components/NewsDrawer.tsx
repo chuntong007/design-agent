@@ -1,11 +1,17 @@
 // AI 新闻分析抽屉：抽屉对照模式的核心组件
 // 从右侧推出，占据 50% 宽度，展示多检索会话 + 真 token 流式报告
 // 特性：多会话切换、思考折叠、Markdown 逐字流、来源列表、锚定、日期联动图表
+// 多基金检索：检索范围由 App.tsx 的 newsTargetCodes 决定（FundList 顶部 chip 区），头部仅显示只读徽章
 import { useState, useEffect, useRef } from 'react'
 import type { NewsSession } from '../types'
 import type { AnchorNews } from '../storage'
 import { makeStyles, type Palette } from '../theme'
 import { useTheme } from '../ThemeContext'
+
+interface FundOption {
+  code: string
+  name: string
+}
 
 interface Props {
   sessions: NewsSession[]
@@ -17,6 +23,8 @@ interface Props {
   anchors: AnchorNews[]
   // 点击报告中的日期 -> 联动图表高亮
   onHighlightDate: (date: string | null) => void
+  // 【多基金检索】可选基金列表(用于头部只读徽章解析基金名)
+  availableFunds?: FundOption[]
 }
 
 export function NewsDrawer({
@@ -28,6 +36,7 @@ export function NewsDrawer({
   onAnchor,
   anchors,
   onHighlightDate,
+  availableFunds,
 }: Props) {
   const { palette: p } = useTheme()
   const styles = makeStyles(p)
@@ -45,6 +54,9 @@ export function NewsDrawer({
   const isAnchored = active
     ? anchors.some((a) => a.date === active.date && a.fundCode === active.fundCode && a.text)
     : false
+  // 【简述】LLM 报告开头必含 `**简述**` 标记，未出现说明报告未完整生成，禁止锚定
+  const hasSummary = active ? active.outputText.includes('**简述**') : false
+  const canAnchor = !!active && !!active.outputText && !active.loading && hasSummary
 
   return (
     <div style={{
@@ -63,32 +75,74 @@ export function NewsDrawer({
         justifyContent: 'space-between',
         alignItems: 'center',
         flexShrink: 0,
+        gap: '8px',
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0, flexWrap: 'wrap' }}>
           <span style={{ ...styles.label }}>AI 新闻分析</span>
           {active && (
             <span style={{ fontSize: '11px', color: p.accent }}>
               {active.date} ±1天
             </span>
           )}
+          {/* 多基金同步检索徽章: 同一批次有 ≥2 个 loading 会话时显示 */}
+          {(() => {
+            const multiCount = sessions.filter((s) => s.isMultiFundSession && s.loading).length
+            if (multiCount < 2) return null
+            return (
+              <span
+                style={{
+                  fontSize: '10px',
+                  padding: '2px 8px',
+                  borderRadius: '10px',
+                  background: p.accent,
+                  color: p.bg0,
+                  fontWeight: 600,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                }}
+                title={`正在同步检索 ${multiCount} 支基金`}
+              >
+                <span style={{
+                  display: 'inline-block',
+                  width: '6px',
+                  height: '6px',
+                  borderRadius: '50%',
+                  background: p.bg0,
+                  animation: 'news-blink 1s steps(2) infinite',
+                }} />
+                ×{multiCount} 同步检索中
+              </span>
+            )
+          })()}
+          {/* 当前检索范围徽章(只读, 由 FundList 顶部 chip 区决定) */}
+          {active && active.targetFundCodes && (
+            <span style={{ fontSize: '11px', padding: '3px 10px', borderRadius: '10px', background: p.accentSoft, color: p.accent, fontWeight: 600, border: `1px solid ${p.accent}33` }}>
+              {active.targetFundCodes.length === 1
+                ? `🔍 仅 ${availableFunds?.find(f => f.code === active.targetFundCodes![0])?.name || active.fundName || active.targetFundCodes![0]}`
+                : `🔍 检索组合 (${active.targetFundCodes.length} 支)`}
+            </span>
+          )}
         </div>
-        <button
-          onClick={onClose}
-          style={{
-            background: 'transparent',
-            border: `1px solid ${p.border}`,
-            color: p.text2,
-            cursor: 'pointer',
-            fontSize: '11px',
-            padding: '3px 8px',
-            borderRadius: '4px',
-            lineHeight: 1.2,
-            fontWeight: 500,
-          }}
-          title="收起抽屉（保留会话，点击右侧展开分析恢复）"
-        >
-          收起 ▸
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+          <button
+            onClick={onClose}
+            style={{
+              background: 'transparent',
+              border: `1px solid ${p.border}`,
+              color: p.text2,
+              cursor: 'pointer',
+              fontSize: '11px',
+              padding: '3px 8px',
+              borderRadius: '4px',
+              lineHeight: 1.2,
+              fontWeight: 500,
+            }}
+            title="收起抽屉（保留会话，点击右侧展开分析恢复）"
+          >
+            收起 ▸
+          </button>
+        </div>
       </div>
 
       {/* 会话切换标签（固定） */}
@@ -173,22 +227,25 @@ export function NewsDrawer({
           flexShrink: 0,
         }}>
           <span style={{ fontSize: '10px', color: p.text2 }}>
-            分析完成 · {active.outputText.length} 字
+            {hasSummary
+              ? `分析完成 · ${active.outputText.length} 字`
+              : '报告中(等待简述标记出现)'}
           </span>
           <button
             onClick={onAnchor}
-            disabled={isAnchored}
+            disabled={isAnchored || !canAnchor}
             style={{
-              background: isAnchored ? `${p.accent}22` : p.accent,
-              color: isAnchored ? p.accent : p.bg0,
-              border: `1px solid ${isAnchored ? p.accent : p.accent}`,
+              background: isAnchored ? `${p.accent}22` : canAnchor ? p.accent : p.bg2,
+              color: isAnchored ? p.accent : canAnchor ? p.bg0 : p.text2,
+              border: `1px solid ${isAnchored ? p.accent : canAnchor ? p.accent : p.border}`,
               borderRadius: '4px',
               padding: '5px 14px',
               fontSize: '11px',
-              cursor: isAnchored ? 'default' : 'pointer',
+              cursor: isAnchored || !canAnchor ? 'default' : 'pointer',
               fontWeight: 600,
+              opacity: canAnchor || isAnchored ? 1 : 0.6,
             }}
-            title="锚定此分析报告到净值点位"
+            title={!hasSummary ? '等待 LLM 输出 **简述** 标记' : '锚定此分析报告到净值点位'}
           >
             {isAnchored ? '✓ 已锚定' : '📍 锚定到图表'}
           </button>

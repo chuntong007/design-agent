@@ -26,6 +26,15 @@ export interface AnchorNews {
   // 【新】真流式分析报告锚定：锚定整篇 Markdown 分析
   text?: string
   reasoning?: string
+  // 【多基金综合研判】锚定对应的多基金列表(单基金锚定时可省略)
+  targetFundCodes?: string[]
+  // 逐基金影响(锚定时从 session 复制)
+  perFundImpact?: Array<{
+    code: string
+    name: string
+    impact: 'positive' | 'negative' | 'neutral'
+    reason: string
+  }>
 }
 
 export interface ViewState {
@@ -93,5 +102,16 @@ export const storage = {
   },
   setView(view: ViewState): void {
     localStorage.setItem(`${PREFIX}view`, JSON.stringify(view))
+  },
+
+  getNewsTimelineListMode(): boolean {
+    try {
+      return localStorage.getItem(`${PREFIX}newsTimelineListMode`) === '1'
+    } catch {
+      return false
+    }
+  },
+  setNewsTimelineListMode(value: boolean): void {
+    localStorage.setItem(`${PREFIX}newsTimelineListMode`, value ? '1' : '0')
   },
 }

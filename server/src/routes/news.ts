@@ -8,23 +8,43 @@ import type { StreamEvent } from '../services/llm'
 export const newsRoutes = Router()
 
 // 检索新闻：/api/news/search?date=2024-03-15&fundCode=005827
-// fundCode 可选，传入则带入基金领域关键词精准检索
+// 也支持多基金: /api/news/search?date=2024-03-15&fundCodes=005827,161725,159995
+// fundCode/fundCodes 可选，传入则带入基金领域关键词精准检索
 newsRoutes.get('/search', async (req, res) => {
   const date = String(req.query.date || '').trim()
-  const fundCode = String(req.query.fundCode || '').trim()
+  // 支持两种: fundCode=005827 或 fundCodes=005827,161725
+  const fundCodesRaw = String(req.query.fundCodes || req.query.fundCode || '').trim()
+  const fundCodes = fundCodesRaw.split(',').map((s) => s.trim()).filter(Boolean)
   if (!date) {
     res.json({ ok: false, error: 'date required' })
     return
   }
   try {
-    let sectors: string[] = []
-    let sectorInfo = null
-    if (fundCode) {
-      const sector = await inferFundSector(fundCode)
-      sectors = sector.keywords
-      sectorInfo = { sectors: sector.sectors, description: sector.description }
+    // 1) 领域识别（并行）
+    let fundInfos: Array<{ code: string; name: string; sectors: string[] }> = []
+    let sectorInfo: any = null
+    if (fundCodes.length > 0) {
+      fundInfos = await Promise.all(
+        fundCodes.map(async (code) => {
+          const sector = await inferFundSector(code)
+          return { code, name: sector.name, sectors: sector.keywords }
+        })
+      )
+      const allSectors = [...new Set(fundInfos.flatMap((f) => f.sectors))]
+      sectorInfo = {
+        sectors: allSectors,
+        description:
+          fundInfos.length > 1
+            ? `多基金组合(共 ${fundInfos.length} 支): ${fundInfos.map((f) => f.name).join('、')}`
+            : fundInfos[0]?.name
+              ? `基金领域: ${allSectors.join('、')}`
+              : '',
+        funds: fundInfos, // 新增：供前端展示
+      }
     }
-    const { articles, market_context } = await searchNews(date, sectors)
+    // 兼容旧字段：单基金时 sectors 仍为 keywords 拼接
+    const flatSectors = fundInfos.flatMap((f) => f.sectors)
+    const { articles, market_context } = await searchNews(date, flatSectors)
     res.json({ ok: true, data: articles, sector: sectorInfo, market_context })
   } catch (err) {
     res.status(500).json({ ok: false, error: (err as Error).message })
@@ -32,9 +52,10 @@ newsRoutes.get('/search', async (req, res) => {
 })
 
 // 流式检索新闻（SSE）：/api/news/search/stream?date=2024-03-15&fundCode=005827
+// 也支持多基金: /api/news/search/stream?date=2024-03-15&fundCodes=005827,161725,159995
 // 响应 Content-Type: text/event-stream
 // 事件序列:
-//   sector   -> { sectors, description }（领域识别完成）
+//   sector   -> { sectors, description, funds? }（领域识别完成，funds 数组仅多基金时存在）
 //   status   -> { stage: 'searching'|'analyzing'|'fallback', message }
 //   sources  -> { urls: string[] }（搜索来源 URL）
 //   article  -> { article: NewsArticle }（增量文章，多条）
@@ -44,7 +65,9 @@ newsRoutes.get('/search', async (req, res) => {
 //   done     -> 结束标记
 newsRoutes.get('/search/stream', async (req, res) => {
   const date = String(req.query.date || '').trim()
-  const fundCode = String(req.query.fundCode || '').trim()
+  // 支持两种: fundCode=005827 或 fundCodes=005827,161725
+  const fundCodesRaw = String(req.query.fundCodes || req.query.fundCode || '').trim()
+  const fundCodes = fundCodesRaw.split(',').map((s) => s.trim()).filter(Boolean)
   if (!date) {
     res.status(400).json({ ok: false, error: 'date required' })
     return
@@ -70,15 +93,27 @@ newsRoutes.get('/search/stream', async (req, res) => {
   })
 
   try {
-    // 1) 领域识别
-    let sectors: string[] = []
-    let sectorInfo = null
-    let fundName: string | undefined
-    if (fundCode) {
-      const sector = await inferFundSector(fundCode)
-      sectors = sector.keywords
-      sectorInfo = { sectors: sector.sectors, description: sector.description }
-      fundName = sector.name
+    // 1) 领域识别（并行推断多支基金）
+    let fundInfos: Array<{ code: string; name: string; sectors: string[] }> = []
+    let sectorInfo: any = null
+    if (fundCodes.length > 0) {
+      fundInfos = await Promise.all(
+        fundCodes.map(async (code) => {
+          const sector = await inferFundSector(code)
+          return { code, name: sector.name, sectors: sector.keywords }
+        })
+      )
+      const allSectors = [...new Set(fundInfos.flatMap((f) => f.sectors))]
+      sectorInfo = {
+        sectors: allSectors,
+        description:
+          fundInfos.length > 1
+            ? `多基金组合(共 ${fundInfos.length} 支): ${fundInfos.map((f) => f.name).join('、')}`
+            : fundInfos[0]?.name
+              ? `基金领域: ${allSectors.join('、')}`
+              : '',
+        funds: fundInfos, // 新增：供前端展示
+      }
     }
     if (clientClosed) return
     sendEvent('sector', sectorInfo)
@@ -88,7 +123,7 @@ newsRoutes.get('/search/stream', async (req, res) => {
 
     let llmFailed = false
     try {
-      await searchNewsByLLMStream(date, sectors, fundName, (event: StreamEvent) => {
+      await searchNewsByLLMStream(date, fundInfos, (event: StreamEvent) => {
         if (clientClosed) return
         switch (event.type) {
           case 'status':
@@ -142,7 +177,8 @@ newsRoutes.get('/search/stream', async (req, res) => {
     // 3) 降级：非流式 GDELT 链 -> 包装为 Markdown 文本一次性推送
     if (clientClosed) return
 
-    const { articles, market_context } = await searchNews(date, sectors)
+    const flatSectors = fundInfos.flatMap((f) => f.sectors)
+    const { articles, market_context } = await searchNews(date, flatSectors)
     if (clientClosed) return
 
     // 将 GDELT 文章包装为 Markdown，作为 output 一次性推送（降级链路无真流式）

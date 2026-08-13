@@ -42,6 +42,12 @@ export function App() {
   const [drawerCollapsed, setDrawerCollapsed] = useState(false)
   // 图表↔报告联动高亮日期
   const [highlightDate, setHighlightDate] = useState<string | null>(null)
+  // 【NewsTimeline 列表模式】true=列表视图 / false=时间轴视图（持久化）
+  const [newsTimelineListMode, setNewsTimelineListMode] = useState<boolean>(() => storage.getNewsTimelineListMode())
+  // 【NewsTimeline 清空全部】确认弹窗开关（由 NavChartPanel 内部 Modal 触发）
+  const [clearAllConfirmOpen, setClearAllConfirmOpen] = useState(false)
+  // 【多基金检索】用户从 FundList 顶部 chip 区预设的检索范围；空选时兜底"全基金综合"
+  const [newsTargetCodes, setNewsTargetCodes] = useState<string[]>([])
   const newsAbortRef = useRef<AbortController | null>(null)
 
   // 抽屉是否可见：有激活会话且未收起
@@ -71,6 +77,10 @@ export function App() {
   useEffect(() => {
     storage.setAnchors(anchors)
   }, [anchors])
+  // 持久化 NewsTimeline 列表模式
+  useEffect(() => {
+    storage.setNewsTimelineListMode(newsTimelineListMode)
+  }, [newsTimelineListMode])
 
   // 加载基金详情
   const loadFundDetail = useCallback(async (code: string) => {
@@ -162,37 +172,63 @@ export function App() {
     setNewsSessions((prev) => prev.map((s) => (s.id === sessionId ? { ...s, ...(typeof patch === 'function' ? patch(s) : patch) } : s)))
   }, [])
 
+  // 取消所有活动检索请求(用于切换下拉选择时清理)
+  const abortAllNews = useCallback(() => {
+    if (newsAbortRef.current) {
+      newsAbortRef.current.abort()
+      newsAbortRef.current = null
+    }
+    // 标记所有 loading 的会话为已取消
+    setNewsSessions((prev) =>
+      prev.map((s) => (s.loading ? { ...s, loading: false, error: '已取消' } : s))
+    )
+  }, [])
+
   // 点击净值曲线 -> 创建新检索会话 + 流式检索（SSE 增量推送）
+  // 【多基金综合研判】统一按 newsTargetCodes 决定 targetCodes；空选兜底"全基金综合"
+  // e: 保留签名兼容(忽略修饰键),NavChartPanel 不再透传 MouseEvent
   const onPointClick = useCallback(
-    (date: string, fundCode: string) => {
+    (date: string, primaryFundCode: string, _e?: React.MouseEvent | React.KeyboardEvent | 'shift' | 'alt') => {
       // 取消上一次未完成的请求
       if (newsAbortRef.current) {
         newsAbortRef.current.abort()
+        newsAbortRef.current = null
       }
 
-      const fund = funds.find((f) => f.code === fundCode)
-      const sessionId = `${date}-${fundCode}-${Date.now()}`
+      // 1. 确定目标基金列表：newsTargetCodes 优先；空选/未设置时兜底为全部已加载基金
+      const loadedFundsList = funds.filter((f) => f.detail)
+      const targetCodes: string[] = newsTargetCodes.length > 0 ? newsTargetCodes : loadedFundsList.map((f) => f.code)
+
+      // 3. 单 session(单 SSE 调用, 后端对多 fundCode 做综合研判)
+      const isMulti = targetCodes.length > 1
+      const sessionId = `${date}-${targetCodes.join('_')}-${Date.now()}`
+      const batchId = isMulti ? `batch-${Date.now()}` : undefined
+      const primaryFund = funds.find((f) => f.code === targetCodes[0])
       const newSession: NewsSession = {
         id: sessionId,
         date,
-        fundCode,
-        fundName: fund?.detail?.name || fund?.name,
+        fundCode: targetCodes[0],
+        fundName: isMulti
+          ? `${targetCodes.length} 支基金组合`
+          : primaryFund?.detail?.name || primaryFund?.name,
         sector: null,
         reasoning: '',
         outputText: '',
         sources: [],
         loading: true,
         error: '',
-        status: { stage: 'init', message: '正在启动检索...' },
+        status: { stage: 'init', message: isMulti ? '正在启动多基金综合研判...' : '正在启动检索...' },
         createdAt: Date.now(),
+        isMultiFundSession: isMulti,
+        batchId,
+        targetFundCodes: targetCodes,
       }
-
-      // 新会话插入到列表开头，激活新会话，展开抽屉
       setNewsSessions((prev) => [newSession, ...prev])
       setActiveSessionId(sessionId)
       setDrawerCollapsed(false)
 
-      const controller = searchNewsStream(date, fundCode, (evt) => {
+      // 4. 单次 SSE 调用(传 fundCodes 数组, 后端做综合研判)
+      const controller = searchNewsStream(date, targetCodes, (evt) => {
         switch (evt.event) {
           case 'sector':
             updateSession(sessionId, { sector: evt.data })
@@ -228,13 +264,17 @@ export function App() {
       })
       newsAbortRef.current = controller
     },
-    [funds, updateSession]
+    [funds, newsTargetCodes, updateSession]
   )
 
   // 锚定当前激活会话的 AI 分析报告（整篇 Markdown）
   const anchorNews = useCallback(
     () => {
       if (!activeSession || !activeSession.outputText) return
+      // 【简述】从 LLM 报告开头提取一句话概括(后端保证 **简述**: <4-8字> 标记)
+      // 用多字符匹配同时兼容 ASCII ':' 和全角'：'，截断到 12 字防爆框
+      const summaryMatch = activeSession.outputText.match(/^\*\*简述\*\*[:：]\s*(.+)$/m)
+      const summary = summaryMatch ? summaryMatch[1].trim().slice(0, 12) : undefined
       const anchor: AnchorNews = {
         id: `${activeSession.date}-${activeSession.fundCode}-${Date.now()}`,
         date: activeSession.date,
@@ -248,6 +288,7 @@ export function App() {
         pinnedAt: Date.now(),
         text: activeSession.outputText,
         reasoning: activeSession.reasoning,
+        summary,
       }
       setAnchors((prev) => {
         // 同一日期同一基金去重
@@ -261,9 +302,9 @@ export function App() {
   )
 
   // 收起抽屉（保留会话状态，仅隐藏，便于回看完整图表后重新展开）
+  // 注：不再联动 setHighlightDate(null)，让用户通过点击/再点圆点自行控制高亮
   const collapseDrawer = useCallback(() => {
     setDrawerCollapsed(true)
-    setHighlightDate(null)
   }, [])
 
   // 展开抽屉（恢复之前收起的会话）
@@ -302,6 +343,47 @@ export function App() {
     })
   }, [])
 
+  // 【NewsTimeline】切换列表/时间轴模式（持久化到 localStorage）
+  const toggleNewsTimelineListMode = useCallback(() => {
+    setNewsTimelineListMode((prev) => {
+      const next = !prev
+      storage.setNewsTimelineListMode(next)
+      return next
+    })
+  }, [])
+
+  // 【NewsTimeline】清空全部锚点：遍历 anchors 一次性移除，并清掉持续高亮 + 关闭确认弹窗
+  const clearAllAnchors = useCallback(() => {
+    setAnchors((prev) => {
+      const next: AnchorNews[] = []
+      storage.setAnchors(next)
+      return next
+    })
+    setHighlightDate(null)
+    setClearAllConfirmOpen(false)
+  }, [])
+
+  // 【NewsTimeline】单击圆点 -> 切换该日期竖线高亮（再次点击同一日期取消高亮）
+  const handleJumpToAnchor = useCallback((date: string) => {
+    setHighlightDate((prev) => (prev === date ? null : date))
+  }, [])
+
+  // 【NewsTimeline】范围滑块变化 -> 联动到 range
+  // 注意：直接 setRange 会让 Header 的 range 选择器同步更新；用户也可以用 Header 改回
+  const handleTimelineRangeChange = useCallback((start: string, end: string) => {
+    // 把 [start, end] 映射到项目内置的 RangeKey（用 1y/3y/5y/all 都行,这里用 'all' 全量最安全）
+    // 实际应用：更合理的做法是依据天数映射到最接近的预设
+    const days = Math.round((new Date(end).getTime() - new Date(start).getTime()) / 86400000)
+    let key: string = 'all'
+    if (days <= 31) key = '1m'
+    else if (days <= 92) key = '3m'
+    else if (days <= 186) key = '6m'
+    else if (days <= 365) key = '1y'
+    else if (days <= 365 * 3) key = '3y'
+    else if (days <= 365 * 5) key = '5y'
+    setRange(key)
+  }, [])
+
   const loadedFunds = funds.filter((f) => f.detail)
   const selectedFund = funds.find((f) => f.code === selectedCode) || funds[0]
 
@@ -326,6 +408,8 @@ export function App() {
               selectedCode={selectedCode}
               onSelect={setSelectedCode}
               onRemove={removeFund}
+              newsTargetCodes={newsTargetCodes}
+              onSetNewsTargets={setNewsTargetCodes}
             />
           </div>
           {/* 中间：图表 + 指标（浮动抽屉遮挡，不挤压） */}
@@ -339,9 +423,18 @@ export function App() {
                 growthErrors={growthErrors}
                 anchors={anchors}
                 onPointClick={onPointClick}
+                newsTargetCodes={newsTargetCodes}
                 newsQuery={activeSession ? { date: activeSession.date, fundCode: activeSession.fundCode } : null}
                 highlightDate={highlightDate}
                 onChartBlankClick={drawerOpen ? collapseDrawer : undefined}
+                onJumpToAnchor={handleJumpToAnchor}
+                onRemoveAnchor={removeAnchor}
+                onRangeChange={handleTimelineRangeChange}
+                listMode={newsTimelineListMode}
+                onToggleListMode={toggleNewsTimelineListMode}
+                onClearAllAnchors={clearAllAnchors}
+                clearAllConfirmOpen={clearAllConfirmOpen}
+                onClearAllConfirmOpenChange={setClearAllConfirmOpen}
               />
             </div>
             <div style={{ ...styles.card, padding: '12px 16px' }}>
@@ -444,6 +537,7 @@ export function App() {
                 onAnchor={anchorNews}
                 anchors={anchors}
                 onHighlightDate={setHighlightDate}
+                availableFunds={loadedFunds.map((f) => ({ code: f.code, name: f.detail?.name || f.name }))}
               />
             </div>
           )}

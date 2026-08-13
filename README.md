@@ -67,12 +67,25 @@ npm run dev
 
 ### ① 添加基金，查看净值走势
 
-在顶栏搜索框输入基金代码 / 名称 / 拼音，选择后加入基金组合（默认内置 4 只演示基金）。
+在顶栏搜索框输入基金代码 / 名称（eastmoney 服务端模糊匹配，含拼音首字母），选择后加入基金组合（默认内置 4 只演示基金）。
 
 - **区间切换**：顶栏 8 档区间（1月 / 3月 / 6月 / 1年 / 3年 / 5年 / 年初至今 / 成立来）
 - **视图切换**：累计收益率（蛋卷口径，随区间重定基，含业绩比较基准虚线）/ 绝对净值
 - **多基金对比**：净值曲线叠加，图例区分颜色
 - **核心指标**：区间总收益、年初至今、最大回撤、年化波动率、夏普比率，横向对比并高亮最优值 ★
+
+#### 检索组合（多基金目标子集）
+
+左栏「📊 已添加基金」下方提供检索组合编辑器，将已添加基金进一步划分为"本次检索的目标子集"：
+
+- **默认全选**：添加基金后默认全在检索组合中
+- **编辑模式**：点击"编辑"按钮 → MultiSelect Popover，全选 / 清空 / 反选 / 逐个切换
+- **范围控制**
+  - **全部基金**：传统单基金检索，逐基金独立 AI 报告
+  - **部分基金**：本次只检索选中的 N 支（其他基金仍显示在图表上作参考，淡化处理）
+- **联动效应**：检索范围会同步传给抽屉头部「🔍 检索组合 (N 支)」徽章；多基金时抽屉显示「×N 同步检索中」徽章
+
+![检索组合编辑](docs/images/fundlist-news-targets.png)
 
 ### ② 重仓股参照分析
 
@@ -97,35 +110,117 @@ npm run dev
 2. **联网搜索**：实时显示命中的新闻来源 URL
 3. **分析报告**：Markdown 逐字渲染 —— 市场概述 → 重要新闻（含影响判断与原因）→ 综合总结
 
-![抽屉展开（已锚定）](docs/images/drawer-anchored.png)
+![抽屉展开（已锚定）](docs/images/drawer-anchored.png) *(新版：含🔍检索组合徽章+×N 同步检索中徽章)*
 
 **抽屉交互**：
 
-- **收起 ▸**：临时收起抽屉回看完整图表（会话状态保留），图表右侧出现胶囊按钮「◂ 展开分析 {日期}」，点击恢复
+- **头部徽章**
+  - **🔍 检索组合 (N 支)**：显示本次检索的基金范围，由左栏检索组合 chip 区决定（单基金检索时不显示）
+  - **×N 同步检索中**：多基金组合检索时显示同步进度（N=同时检索的基金数）
+- **收起 ▸**：临时收起抽屉回看完整图表（会话状态保留），图表右侧出现复合按钮「◂ 展开分析 [日期] [字数]」，点击恢复
 - **多会话**：连续点击不同点位，会话标签栏累积历史，可切换查看、逐个移除
 - **日期联动**：点击报告中的日期标签，图表对应点位高亮闪烁
 
-![抽屉收起态](docs/images/drawer-collapsed.png)
+![抽屉收起态](docs/images/drawer-collapsed.png) *(新版：◂ 展开分析 [日期] [字数] 复合按钮)*
 
 ### ④ 分析报告锚定对照
 
 分析完成后，抽屉底部**锚定按钮**（固定 footer）将整篇报告锚定到对应净值点位：
 
 - 图表上显示锚点标记（竖线 + 圆点 + 标题）
-- 右栏"已锚定报告"列表按时间排序，点击展开查看完整分析
+- 右栏"已锚定报告"列表按时间排序，点击行内展开查看报告前 500 字预览（完整内容见抽屉/时间轴 Tooltip）
 - 支持取消锚定，localStorage 持久化，刷新不丢失
+
+#### 锚定报告时间轴（NewsTimeline）
+
+净值图下方的时间轴集中展示所有已锚定报告，自动处理密集场景：
+
+**精准悬停高亮**
+
+- 鼠标悬停任一气泡或圆点 → 仅该锚点高亮（scale 1.05 + 主色描边）
+- 悬停离开延迟 200ms，允许移入 Tooltip 区域不中断
+- 同一基金的多锚点通过虚线连接（弱化样式，仅作关联线索）
+
+**N 层气泡避让（自适应布局）**
+
+- 算法：多层贪心扫描，每层独立维护右边缘；放不下自动上 1 层
+- 极简模式：≥8 锚点时气泡截断到 4 字，完整内容在 Tooltip
+- canvas 高度按最大层数自适应（140 ~ 252px）
+- ≥4 层（超密）自动切换到列表模式，顶部提示"检测到 N 锚点，推荐使用列表模式"
+
+**列表模式（应对密集场景）**
+
+- 点击右上角"📋 列表"按钮切换
+- 表格视图：日期 / 简述 / 基金 / 影响 chip（↑正/↓负/−中） / 跳转 / 删除
+- 列表模式偏好持久化到 localStorage
+- 极小宽度（< 400px）自动开启
+
+**全部清空**
+
+- 双模式都可触达：右上角"🗑 全部清空"按钮
+- 点击触发 Mantine Modal 二次确认（防误操作）
+- 确认后清空所有锚点 + 清除持续高亮 + 关闭弹窗
+
+**持续高亮切换**
+
+- 单击锚点 → 图表上对应日期出现高亮竖线（单击切换 toggle）
+- 再次点击同一锚点 → 取消高亮
+- 关闭抽屉不再强制清除高亮（用户可独立控制）
+
+![锚定时间轴 - 气泡避让](docs/images/newstimeline-anchors-dense.png)
+
+![列表模式 - 表格视图](docs/images/newstimeline-list-mode.png)
 
 ### ⑤ 策略回测
 
 顶栏切换到"策略回测"，选择基金、回测区间（默认跟随分析区间）、初始资金，从 **10 种策略**中选择并配置参数后运行回测：
 
-> 定投(DCA)、均线交叉、动量轮动、止损止盈、网格交易、双动量、均值回归、趋势跟踪、Kelly 公式仓位、RSI 超买超卖
+> 定投(DCA)、均线交叉、动量轮动、止损止盈、网格交易、双动量、均值回归、趋势跟踪、Kelly 公式仓位、RSI 超买超卖（按风险等级/分类 Badge 着色）
 
 ![回测配置](docs/images/backtest-config.png)
 
 回测结果展示策略与基准（期初全仓买入持有）的净值对比曲线、交易记录明细及指标（总收益率、年化收益、最大回撤、夏普比率、胜率、交易次数、基准收益、超额收益）。
 
 ![回测结果](docs/images/backtest-result.png)
+
+---
+
+## 组件交互参考
+
+### NewsTimeline 主要交互（以本轮增强为主）
+
+| 交互 | 触发 | 效果 |
+|------|------|------|
+| 鼠标悬停圆点 / 气泡 | `onMouseEnter` | 该锚点高亮 + Tooltip 浮现 + 同基金虚线 |
+| 鼠标移入 Tooltip | `onMouseEnter` | 取消 200ms 离开延迟（不中断） |
+| 鼠标离开 | `onMouseLeave` | 200ms 延迟清状态（支持移入 Tooltip） |
+| 单击圆点 / 气泡 | `onClick` | 触发 `onJumpTo(date, anchorId)` → 图表高亮竖线 toggle |
+| 再次点击同一锚点 | `onClick` | 取消图表高亮 |
+| 右键圆点 / 气泡 | `onContextMenu` | 触发 `onRemove(anchorId)` 直接删除 |
+| 键盘 Tab + Enter | `onKeyDown` | 同单击（无障碍） |
+| 拖动范围滑块 | `onMouseDown` handle | 触发 `onRangeChange(start, end)` 调整 X 轴 |
+| 双击空白 | `onDoubleClick` | 重置范围到全部 |
+| 列表模式切换 | `onClick` 📋/📊 | 列表 ↔ 时间轴，持久化到 localStorage |
+| 全部清空 | `onClick` 🗑 | 弹出 Mantine Modal 二次确认 |
+
+### 持续高亮 vs 悬停高亮
+
+| 维度 | 悬停高亮 (`hovered`) | 持续高亮 (`highlightDate`) |
+|------|---------------------|---------------------------|
+| 触发 | 鼠标进入 | 单击 |
+| 持续 | 鼠标离开后 200ms | 直到再次点击或点击其他锚点 |
+| 视觉 | scale 1.05 + accent border | 图表 X 轴对应日期高亮竖线 |
+| 用途 | 临时浏览 | 锁定关注点 / 跨期对照 |
+
+### 列表模式建议阈值
+
+| 锚点数 | 建议视图 |
+|--------|---------|
+| 0 | 不渲染时间轴 |
+| 1-7 | 时间轴（完整文本） |
+| 8-49 | 时间轴（极简模式 4 字气泡） |
+| 50+ | 顶部 banner 建议列表模式 |
+| ≥ 4 层 | 自动切到列表模式 |
 
 ---
 
@@ -172,8 +267,8 @@ claude-design/
         ├── theme.ts           # 设计系统（亮/暗双主题）
         ├── ThemeContext.tsx   # 主题上下文 Provider
         ├── metrics.ts         # 指标计算（收益/回撤/波动率/夏普）
-        ├── storage.ts         # localStorage 持久化
-        ├── App.tsx            # 主组件（布局 + 抽屉状态 + 多会话管理）
+        ├── storage.ts         # localStorage 持久化（含列表模式/视图/锚定/基金）
+        ├── App.tsx            # 主组件（布局 + 抽屉状态 + 多会话管理 + 锚定高亮）
         ├── main.tsx           # 入口 + MantineProvider + 全局样式
         └── components/
             ├── Header.tsx         # 顶栏（搜索/区间/视图/主 Tab）
@@ -182,6 +277,7 @@ claude-design/
             ├── MetricsPanel.tsx   # 指标横向对比
             ├── HoldingsPanel.tsx  # 重仓股（饼图/行情/走势）
             ├── NewsDrawer.tsx     # AI 分析抽屉（流式报告 + 多会话 + 日期联动）
+            ├── NewsTimeline.tsx   # 锚定报告时间轴（N 层布局 + 精准高亮 + 列表模式）
             ├── ErrorBoundary.tsx  # 图表渲染错误兜底
             └── BacktestPanel.tsx  # 策略回测
 ```
@@ -195,7 +291,7 @@ claude-design/
 | 重仓股 | eastmoney FundArchivesDatas | JSONP 含 HTML 表格 |
 | 个股行情 | 腾讯 qt.gtimg.cn | GBK 编码，A 股+港股 |
 | 个股 K 线 | 腾讯 web.ifzq.gtimg.cn | 前复权日线 |
-| AI 新闻分析 | LLM Responses API + web_search（codex 协议） | 真 token 流式 + reasoning；经 CC-Switch codex 配置本地转发，不走代理 |
+| AI 新闻分析 | LLM Responses API + web_search（codex 协议） | 真 token 流式 + reasoning；模型由 CC-Switch 默认配置决定，业务系统不指定；经 CC-Switch codex 配置本地转发，不走代理 |
 | 新闻降级 | GDELT / Wikipedia / 新浪 | GDELT/Wikipedia 走 socks5h 代理；GDELT 限流严格，三级降级 |
 
 ## 已知限制
@@ -205,3 +301,28 @@ claude-design/
 - Wikipedia "On This Day" 返回历史同日事件（按与目标年份接近度排序）
 - 新浪财经滚动新闻仅含近期新闻，作为最终降级
 - 港股行情字段与 A 股有差异，已做兼容处理
+
+## 开发备忘
+
+### 本轮 NewsTimeline 增强要点
+
+- **N 层布局**：`placeBubbles` 从硬编码 2 层升级为多层贪心，canvas 高度自适应
+- **精准高亮**：用 `hoveredPlacementIdx` 索引而非 `fundCode` 关联，消除"误高亮"误解
+- **气泡可交互**：移除 `pointerEvents: none`，气泡与圆点行为完全一致
+- **刻度自适应**：`stepMonths` 候选扩到 `[1,2,3,6,12,24,60]`，覆盖 30 天 ~ 50 年
+- **列表模式**：双模式可触达 + 50+ 提示 banner + 极简文本 4 字截断
+- **全部清空**：双模式 Mantine Modal 二次确认
+- **状态分离**：`App.tsx` 持 `highlightDate` + 列表模式/清空 state，`NewsTimeline` 持 hover/transient state
+
+### 关键文件
+
+- `client/src/components/NewsTimeline.tsx` （新增）— 主战场
+- `client/src/components/NavChartPanel.tsx` — 5 个新 props 透传 + Modal 集成
+- `client/src/App.tsx` — toggle `highlightDate` + 列表模式/清空 state/callback
+- `client/src/storage.ts` — `getNewsTimelineListMode` / `setNewsTimelineListMode` 持久化
+
+### 已知约束
+
+- 浏览器实测需后端 8787 可达（基金详情加载后 NewsTimeline 才挂载）
+- dev 期密集场景建议直接通过抽屉锚定 ≥10 个不同日期点复现
+- 列表模式偏好独立持久化，不受 `view` 状态影响

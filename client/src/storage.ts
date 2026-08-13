@@ -1,0 +1,117 @@
+// localStorage 持久化：基金列表、视图设置、锚定新闻
+// 演示基金：明星权益 + 半导体 + 新能源
+
+const PREFIX = 'fund-dashboard:'
+
+export interface PinnedFund {
+  code: string
+  name: string
+  addedAt: number
+}
+
+export interface AnchorNews {
+  id: string // 锚点唯一 ID
+  date: string // 净值日期 YYYY-MM-DD
+  timestamp: number
+  fundCode: string // 锚定时所选基金
+  title: string
+  url: string
+  source: string
+  category: string
+  impact: string
+  pinnedAt: number
+  // LLM 归因字段(可选,锚定时从 NewsArticle 复制)
+  summary?: string
+  impact_reason?: string
+  // 【新】真流式分析报告锚定：锚定整篇 Markdown 分析
+  text?: string
+  reasoning?: string
+  // 【多基金综合研判】锚定对应的多基金列表(单基金锚定时可省略)
+  targetFundCodes?: string[]
+  // 逐基金影响(锚定时从 session 复制)
+  perFundImpact?: Array<{
+    code: string
+    name: string
+    impact: 'positive' | 'negative' | 'neutral'
+    reason: string
+  }>
+}
+
+export interface ViewState {
+  range: string
+  chartMode: 'return' | 'nav' // return=累计收益率(默认, 蛋卷口径) / nav=绝对净值
+}
+
+const DEMO_FUNDS: PinnedFund[] = [
+  { code: '005827', name: '易方达蓝筹精选混合', addedAt: Date.now() },
+  { code: '161725', name: '招商中证白酒指数', addedAt: Date.now() + 1 },
+  { code: '159995', name: '华夏国证半导体芯片ETF联接', addedAt: Date.now() + 2 },
+  { code: '012543', name: '华夏新能源车ETF联接', addedAt: Date.now() + 3 },
+]
+
+export const storage = {
+  getFunds(): PinnedFund[] {
+    try {
+      const raw = localStorage.getItem(`${PREFIX}funds`)
+      if (!raw) {
+        localStorage.setItem(`${PREFIX}funds`, JSON.stringify(DEMO_FUNDS))
+        return DEMO_FUNDS
+      }
+      const parsed = JSON.parse(raw)
+      // 空数组时回退到演示基金（避免调试清空后无法恢复）
+      if (!Array.isArray(parsed) || parsed.length === 0) {
+        localStorage.setItem(`${PREFIX}funds`, JSON.stringify(DEMO_FUNDS))
+        return DEMO_FUNDS
+      }
+      return parsed
+    } catch {
+      return DEMO_FUNDS
+    }
+  },
+  setFunds(funds: PinnedFund[]): void {
+    localStorage.setItem(`${PREFIX}funds`, JSON.stringify(funds))
+  },
+
+  getAnchors(): AnchorNews[] {
+    try {
+      const raw = localStorage.getItem(`${PREFIX}anchors`)
+      return raw ? JSON.parse(raw) : []
+    } catch {
+      return []
+    }
+  },
+  setAnchors(anchors: AnchorNews[]): void {
+    localStorage.setItem(`${PREFIX}anchors`, JSON.stringify(anchors))
+  },
+
+  getView(): ViewState {
+    try {
+      const raw = localStorage.getItem(`${PREFIX}view`)
+      if (raw) {
+        const parsed = JSON.parse(raw)
+        return {
+          range: parsed.range || '1y',
+          // 旧版本 stored normalized 字段已废弃，迁移为默认累计收益率
+          chartMode: parsed.chartMode === 'nav' ? 'nav' : 'return',
+        }
+      }
+      return { range: '1y', chartMode: 'return' }
+    } catch {
+      return { range: '1y', chartMode: 'return' }
+    }
+  },
+  setView(view: ViewState): void {
+    localStorage.setItem(`${PREFIX}view`, JSON.stringify(view))
+  },
+
+  getNewsTimelineListMode(): boolean {
+    try {
+      return localStorage.getItem(`${PREFIX}newsTimelineListMode`) === '1'
+    } catch {
+      return false
+    }
+  },
+  setNewsTimelineListMode(value: boolean): void {
+    localStorage.setItem(`${PREFIX}newsTimelineListMode`, value ? '1' : '0')
+  },
+}

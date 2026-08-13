@@ -1,0 +1,1288 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>NewsTimeline 组件原型 · 基金分析仪表盘</title>
+<style>
+  /* ============================================================
+   * Design Tokens — 与 client/src/theme.ts 对齐
+   * ============================================================ */
+  :root {
+    /* 背景层级 */
+    --bg0: #f7f8fa;
+    --bg1: #ffffff;
+    --bg2: #f1f3f6;
+    --bg3: #e8ebf0;
+    /* 边框 */
+    --border: #e3e7ec;
+    --borderLight: #d0d5dd;
+    /* 文字 */
+    --text0: #1f2937;
+    --text1: #4b5563;
+    --text2: #8a94a6;
+    /* 涨跌(A股惯例:红涨绿跌,降饱和) */
+    --up: #dc2626;
+    --down: #16a34a;
+    --neutral: #64748b;
+    /* 强调 */
+    --accent: #2563eb;
+    --accentDim: #dbeafe;
+    --accentSoft: #eff6ff;
+    /* 多基金曲线配色 */
+    --series-1: #2563eb;
+    --series-2: #d97706;
+    --series-3: #7c3aed;
+    --series-4: #db2777;
+    --series-5: #0d9488;
+    /* 阴影 */
+    --shadow-sm: 0 1px 2px rgba(15, 23, 42, .04), 0 1px 1px rgba(15, 23, 42, .03);
+    --shadow-md: 0 4px 10px -2px rgba(15, 23, 42, .06), 0 2px 4px -1px rgba(15, 23, 42, .04);
+    --shadow-lg: 0 10px 25px -5px rgba(15, 23, 42, .10), 0 6px 10px -5px rgba(15, 23, 42, .04);
+    /* 圆角 */
+    --r-sm: 6px;
+    --r-md: 8px;
+    --r-lg: 12px;
+    /* 字体 */
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+      "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  }
+
+  html[data-theme="dark"] {
+    --bg0: #14171c;
+    --bg1: #1c2026;
+    --bg2: #252a32;
+    --bg3: #2f353f;
+    --border: #323842;
+    --borderLight: #404752;
+    --text0: #d4d9e0;
+    --text1: #9ba3af;
+    --text2: #6b7280;
+    --up: #f87171;
+    --down: #4ade80;
+    --neutral: #94a3b8;
+    --accent: #60a5fa;
+    --accentDim: #1e3a5f;
+    --accentSoft: #172033;
+    --series-1: #60a5fa;
+    --series-2: #fbbf24;
+    --series-3: #c084fc;
+    --series-4: #f472b6;
+    --series-5: #2dd4bf;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, .3);
+    --shadow-md: 0 4px 10px -2px rgba(0, 0, 0, .4), 0 2px 4px -1px rgba(0, 0, 0, .3);
+    --shadow-lg: 0 10px 25px -5px rgba(0, 0, 0, .5), 0 6px 10px -5px rgba(0, 0, 0, .3);
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    font-family: var(--font-sans);
+    background: var(--bg0);
+    color: var(--text0);
+    -webkit-font-smoothing: antialiased;
+    transition: background-color .25s ease, color .25s ease;
+  }
+
+  /* ============================================================
+   * Page Shell
+   * ============================================================ */
+  .page {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 40px 24px 80px;
+  }
+
+  .page-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 32px;
+    flex-wrap: wrap; gap: 16px;
+  }
+  .page-title {
+    margin: 0;
+    font-size: 24px; font-weight: 600; letter-spacing: -.01em;
+    color: var(--text0);
+  }
+  .page-subtitle {
+    margin: 4px 0 0; font-size: 13px; color: var(--text1);
+  }
+  .page-subtitle code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: var(--bg2); padding: 1px 6px; border-radius: 4px;
+    font-size: 12px;
+  }
+
+  .toolbar {
+    display: flex; gap: 8px; align-items: center;
+  }
+  .theme-toggle {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: var(--bg1); color: var(--text1);
+    border: 1px solid var(--border); border-radius: var(--r-md);
+    padding: 8px 14px; font-size: 13px; cursor: pointer;
+    transition: all .15s ease;
+    font-family: inherit;
+  }
+  .theme-toggle:hover {
+    background: var(--bg2); color: var(--text0);
+    border-color: var(--borderLight);
+  }
+  .theme-toggle .icon { font-size: 14px; }
+
+  .scene-tabs {
+    display: inline-flex; gap: 4px; padding: 4px;
+    background: var(--bg1); border: 1px solid var(--border);
+    border-radius: var(--r-md);
+  }
+  .scene-tab {
+    padding: 6px 14px; font-size: 13px; cursor: pointer;
+    border: none; background: transparent; color: var(--text1);
+    border-radius: var(--r-sm); font-family: inherit;
+    transition: all .15s ease;
+  }
+  .scene-tab:hover { color: var(--text0); }
+  .scene-tab.active {
+    background: var(--accent); color: #fff;
+    box-shadow: var(--shadow-sm);
+  }
+
+  /* ============================================================
+   * Scene Card
+   * ============================================================ */
+  .scene {
+    background: var(--bg1);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    padding: 24px;
+    margin-bottom: 24px;
+    box-shadow: var(--shadow-sm);
+  }
+  .scene-meta {
+    display: flex; align-items: baseline; gap: 12px;
+    margin-bottom: 16px; padding-bottom: 12px;
+    border-bottom: 1px dashed var(--border);
+  }
+  .scene-tag {
+    display: inline-block; padding: 2px 8px; font-size: 11px;
+    background: var(--accentSoft); color: var(--accent);
+    border-radius: 4px; font-weight: 600; letter-spacing: .04em;
+  }
+  .scene-title {
+    margin: 0; font-size: 15px; font-weight: 600; color: var(--text0);
+  }
+  .scene-desc {
+    margin: 0; font-size: 12px; color: var(--text2); flex: 1;
+  }
+
+  /* ============================================================
+   * Mock Chart (above timeline) — to show alignment with x-axis
+   * ============================================================ */
+  .mock-chart {
+    height: 120px; position: relative;
+    background: var(--bg2); border-radius: var(--r-md);
+    overflow: hidden; margin-bottom: 0;
+    border: 1px solid var(--border);
+  }
+  .mock-chart svg { display: block; width: 100%; height: 100%; }
+  .mock-chart .grid-line { stroke: var(--border); stroke-width: 1; stroke-dasharray: 2 4; }
+  .mock-chart .axis-label { fill: var(--text2); font-size: 10px; font-family: inherit; }
+  .mock-chart .series { fill: none; stroke-width: 1.5; opacity: .85; }
+  .mock-chart .cursor {
+    stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 3 3;
+    opacity: 0; transition: opacity .2s ease;
+  }
+  .mock-chart .cursor.active { opacity: 1; }
+
+  /* ============================================================
+   * NewsTimeline 组件
+   * ============================================================ */
+  .nt-root {
+    position: relative;
+    margin-top: -1px; /* 让横线与图表底边视觉重合 */
+    padding: 56px 0 36px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    background: var(--bg1);
+    border: 1px solid var(--border);
+    border-top: none;
+    border-radius: 0 0 var(--r-lg) var(--r-lg);
+  }
+  .nt-root::-webkit-scrollbar { height: 8px; }
+  .nt-root::-webkit-scrollbar-track { background: var(--bg2); }
+  .nt-root::-webkit-scrollbar-thumb { background: var(--borderLight); border-radius: 4px; }
+  .nt-root::-webkit-scrollbar-thumb:hover { background: var(--text2); }
+
+  .nt-canvas {
+    position: relative;
+    min-width: 100%;
+    height: 140px;
+  }
+
+  /* 主横线 */
+  .nt-baseline {
+    position: absolute;
+    left: 0; right: 0; top: 80px;
+    height: 1px; background: var(--borderLight);
+  }
+  /* 刻度尺: 主要刻度高, 次要短而淡；今天高亮主色 */
+  .nt-tick {
+    position: absolute;
+    top: 88px;
+    width: 1px; height: 8px; background: var(--borderLight);
+  }
+  .nt-tick.minor { height: 4px; opacity: 0.4; }
+  .nt-tick.today { background: var(--accent); opacity: 1; }
+  .nt-tick-label {
+    position: absolute;
+    top: 100px;
+    transform: translateX(-50%);
+    font-size: 10px; color: var(--text2);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    font-weight: 500;
+  }
+  .nt-tick-label.today { color: var(--accent); font-weight: 700; }
+  .nt-tick-today-dot {
+    position: absolute;
+    top: 112px;
+    transform: translateX(-50%);
+    width: 4px; height: 4px; border-radius: 50%;
+    background: var(--accent);
+  }
+
+  /* 圆点容器 */
+  .nt-dot {
+    position: absolute;
+    top: 74px;
+    width: 12px; height: 12px;
+    margin-left: -6px;
+    border-radius: 50%;
+    background: var(--neutral);
+    border: 2px solid var(--bg1);
+    box-shadow: 0 0 0 1px var(--borderLight), var(--shadow-sm);
+    cursor: pointer;
+    transition: transform .15s ease, box-shadow .15s ease;
+    z-index: 2;
+  }
+  .nt-dot:hover, .nt-dot:focus-visible {
+    transform: scale(1.35);
+    box-shadow: 0 0 0 1px var(--accent), 0 0 0 4px var(--accentDim), var(--shadow-md);
+    outline: none;
+  }
+  .nt-dot.dense { width: 8px; height: 8px; margin-left: -4px; }
+  .nt-dot.merged { width: 22px; border-radius: 11px; margin-left: -11px; }
+  .nt-dot.merged .nt-dot-count {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 9px; font-weight: 700;
+  }
+  /* 按 impact 着色 (作为底层色, 多基金色系会覆盖) */
+  .nt-dot.impact-positive { background: var(--down); } /* A股绿=涨 */
+  .nt-dot.impact-negative { background: var(--up); }   /* A股红=跌 */
+  .nt-dot.impact-neutral  { background: var(--neutral); }
+
+  /* 气泡 (bubble) */
+  .nt-bubble {
+    position: absolute;
+    transform: translateX(-50%);
+    background: var(--bg1);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    padding: 3px 8px;
+    font-size: 11px; font-weight: 500;
+    color: var(--text0);
+    white-space: nowrap;
+    box-shadow: var(--shadow-sm);
+    z-index: 1;
+    pointer-events: none;
+    transition: transform .15s ease, box-shadow .15s ease;
+  }
+  .nt-bubble.up { top: 8px; }
+  .nt-bubble.down { top: 44px; }
+  /* 气泡三角(指向圆点) */
+  .nt-bubble::after {
+    content: ''; position: absolute;
+    left: 50%; transform: translateX(-50%);
+    width: 0; height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+  }
+  .nt-bubble.up::after {
+    bottom: -4px;
+    border-top: 5px solid var(--border);
+  }
+  .nt-bubble.up::before {
+    content: ''; position: absolute;
+    left: 50%; transform: translateX(-50%);
+    bottom: -3px;
+    width: 0; height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 4px solid var(--bg1);
+    z-index: 1;
+  }
+  .nt-bubble.down::after {
+    top: -4px;
+    border-bottom: 5px solid var(--border);
+  }
+  .nt-bubble.down::before {
+    content: ''; position: absolute;
+    left: 50%; transform: translateX(-50%);
+    top: -3px;
+    width: 0; height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-bottom: 4px solid var(--bg1);
+    z-index: 1;
+  }
+
+  /* 多基金色系: 圆点用细描边+淡内填充区分 */
+  .nt-dot.fund-1 { box-shadow: 0 0 0 2px var(--series-1), 0 0 0 3px var(--bg1), var(--shadow-sm); background: var(--bg1); }
+  .nt-dot.fund-2 { box-shadow: 0 0 0 2px var(--series-2), 0 0 0 3px var(--bg1), var(--shadow-sm); background: var(--bg1); }
+  .nt-dot.fund-3 { box-shadow: 0 0 0 2px var(--series-3), 0 0 0 3px var(--bg1), var(--shadow-sm); background: var(--bg1); }
+  .nt-dot.fund-4 { box-shadow: 0 0 0 2px var(--series-4), 0 0 0 3px var(--bg1), var(--shadow-sm); background: var(--bg1); }
+  .nt-dot.fund-5 { box-shadow: 0 0 0 2px var(--series-5), 0 0 0 3px var(--bg1), var(--shadow-sm); background: var(--bg1); }
+  .nt-dot.fund-1.impact-positive { background: var(--down); }
+  .nt-dot.fund-1.impact-negative { background: var(--up); }
+  .nt-dot.fund-2.impact-positive { background: var(--down); }
+  .nt-dot.fund-2.impact-negative { background: var(--up); }
+  .nt-dot.fund-3.impact-positive { background: var(--down); }
+  .nt-dot.fund-3.impact-negative { background: var(--up); }
+  .nt-dot.fund-4.impact-positive { background: var(--down); }
+  .nt-dot.fund-4.impact-negative { background: var(--up); }
+  .nt-dot.fund-5.impact-positive { background: var(--down); }
+  .nt-dot.fund-5.impact-negative { background: var(--up); }
+
+  /* 气泡左侧色条,表示基金 */
+  .nt-bubble .fund-stripe {
+    display: inline-block; width: 6px; height: 6px;
+    border-radius: 50%; margin-right: 4px; vertical-align: 1px;
+  }
+  .nt-bubble.fund-1 .fund-stripe { background: var(--series-1); }
+  .nt-bubble.fund-2 .fund-stripe { background: var(--series-2); }
+  .nt-bubble.fund-3 .fund-stripe { background: var(--series-3); }
+  .nt-bubble.fund-4 .fund-stripe { background: var(--series-4); }
+  .nt-bubble.fund-5 .fund-stripe { background: var(--series-5); }
+  /* 影响符号 (↑ 利好 / ↓ 利空 / − 中性) */
+  .nt-bubble .impact-sym {
+    font-weight: 700; font-size: 10px; margin-right: 1px;
+  }
+  .nt-bubble .impact-sym.pos { color: var(--down); }
+  .nt-bubble .impact-sym.neg { color: var(--up); }
+  .nt-bubble .impact-sym.neu { color: var(--neutral); }
+  /* 基金代码后缀 */
+  .nt-bubble .fund-code {
+    color: var(--text2); font-size: 10px;
+    margin-left: 2px; font-variant-numeric: tabular-nums;
+  }
+
+  /* ============================================================
+   * Tooltip (悬停卡片)
+   * ============================================================ */
+  .nt-tooltip {
+    position: fixed;
+    z-index: 1000;
+    background: var(--bg1);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: 10px 12px;
+    min-width: 220px; max-width: 320px;
+    box-shadow: var(--shadow-lg);
+    pointer-events: auto;
+    font-size: 12px;
+    opacity: 0; transform: translateY(4px);
+    transition: opacity .12s ease, transform .12s ease;
+  }
+  .nt-tooltip.visible { opacity: 1; transform: translateY(0); }
+  .nt-tooltip-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px; margin-bottom: 6px;
+  }
+  .nt-tooltip-date {
+    font-size: 11px; color: var(--text2);
+    font-variant-numeric: tabular-nums;
+  }
+  .nt-tooltip-impact {
+    font-size: 10px; padding: 2px 6px; border-radius: 4px;
+    font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
+  }
+  .nt-tooltip-impact.positive { background: rgba(22, 163, 74, .12); color: var(--down); }
+  .nt-tooltip-impact.negative { background: rgba(220, 38, 38, .12); color: var(--up); }
+  .nt-tooltip-impact.neutral  { background: var(--bg3); color: var(--neutral); }
+  .nt-tooltip-summary {
+    font-size: 13px; font-weight: 600; color: var(--text0);
+    margin: 0 0 4px;
+  }
+  .nt-tooltip-title {
+    font-size: 12px; color: var(--text1); line-height: 1.5;
+    margin: 0 0 6px;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .nt-tooltip-fund {
+    font-size: 11px; color: var(--text2); margin: 0 0 8px;
+  }
+  .nt-tooltip-fund .fund-stripe {
+    display: inline-block; width: 6px; height: 6px;
+    border-radius: 50%; margin-right: 4px; vertical-align: 1px;
+  }
+  .nt-tooltip-fund.fund-1 .fund-stripe { background: var(--series-1); }
+  .nt-tooltip-fund.fund-2 .fund-stripe { background: var(--series-2); }
+  .nt-tooltip-fund.fund-3 .fund-stripe { background: var(--series-3); }
+  .nt-tooltip-fund.fund-4 .fund-stripe { background: var(--series-4); }
+  .nt-tooltip-fund.fund-5 .fund-stripe { background: var(--series-5); }
+  .nt-tooltip-actions {
+    display: flex; gap: 6px;
+    border-top: 1px solid var(--border);
+    padding-top: 8px; margin-top: 4px;
+  }
+  /* 3 个数据维度: 字数 / 距今 / 同基金 */
+  .nt-tooltip-stats {
+    display: flex; gap: 10px;
+    font-size: 10px; color: var(--text2);
+    padding: 4px 0 6px;
+    border-top: 1px dashed var(--border);
+    border-bottom: 1px solid var(--border);
+    margin: 0 0 6px;
+    font-variant-numeric: tabular-nums;
+  }
+  .nt-btn {
+    flex: 1;
+    background: var(--bg2); border: 1px solid var(--border);
+    color: var(--text1); border-radius: var(--r-sm);
+    padding: 4px 8px; font-size: 11px; cursor: pointer;
+    font-family: inherit;
+    transition: all .12s ease;
+  }
+  .nt-btn:hover { background: var(--bg3); color: var(--text0); }
+  .nt-btn.primary {
+    background: var(--accent); color: #fff; border-color: var(--accent);
+  }
+  .nt-btn.primary:hover { filter: brightness(1.1); }
+  .nt-btn.danger { color: var(--up); }
+  .nt-btn.danger:hover { background: rgba(220, 38, 38, .1); border-color: var(--up); }
+
+  /* ============================================================
+   * Range Slider (双滑块缩放)
+   * ============================================================ */
+  .nt-range-track {
+    position: absolute;
+    left: 0; right: 0; top: 134px;
+    height: 6px;
+    background: var(--bg2);
+    border-radius: 3px;
+  }
+  .nt-range-selected {
+    position: absolute; top: 0;
+    height: 100%;
+    background: var(--accentDim);
+    border-radius: 3px;
+  }
+  .nt-range-handle {
+    position: absolute;
+    top: -3px; width: 12px; height: 12px;
+    background: var(--accent);
+    border: 2px solid var(--bg1);
+    border-radius: 50%;
+    transform: translateX(-50%);
+    cursor: ew-resize;
+    box-shadow: var(--shadow-sm);
+    transition: transform .12s ease, box-shadow .12s ease;
+    z-index: 3;
+  }
+  .nt-range-handle:hover, .nt-range-handle.active {
+    transform: translateX(-50%) scale(1.2);
+    box-shadow: 0 0 0 4px var(--accentDim), var(--shadow-md);
+  }
+  .nt-range-reset-hint {
+    position: absolute; top: 142px; right: 8px;
+    font-size: 10px; color: var(--text2);
+    font-style: italic;
+  }
+  .nt-range-reset-hint kbd {
+    display: inline-block;
+    padding: 1px 4px; font-size: 9px;
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 3px; font-family: inherit;
+    margin: 0 2px;
+  }
+
+  /* ============================================================
+   * Console 面板
+   * ============================================================ */
+  .console {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    margin-top: 24px;
+    overflow: hidden;
+  }
+  .console-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px;
+    background: var(--bg3);
+    border-bottom: 1px solid var(--border);
+  }
+  .console-title {
+    font-size: 11px; font-weight: 600; color: var(--text1);
+    letter-spacing: .04em; text-transform: uppercase;
+  }
+  .console-clear {
+    background: transparent; border: none; color: var(--text2);
+    font-size: 11px; cursor: pointer; padding: 2px 6px;
+    border-radius: 3px; font-family: inherit;
+  }
+  .console-clear:hover { color: var(--text0); background: var(--bg2); }
+  .console-body {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11.5px; line-height: 1.6;
+    padding: 10px 12px;
+    max-height: 180px; overflow-y: auto;
+    color: var(--text1);
+  }
+  .console-line { display: flex; gap: 8px; }
+  .console-time { color: var(--text2); flex-shrink: 0; }
+  .console-tag {
+    display: inline-block; padding: 0 5px; border-radius: 3px;
+    font-size: 10px; font-weight: 600; flex-shrink: 0;
+  }
+  .console-tag.click  { background: var(--accentSoft); color: var(--accent); }
+  .console-tag.remove { background: rgba(220, 38, 38, .1); color: var(--up); }
+  .console-tag.range  { background: rgba(217, 119, 6, .1); color: #d97706; }
+  .console-tag.theme  { background: var(--bg3); color: var(--text1); }
+  .console-msg { color: var(--text0); }
+  .console-msg code {
+    background: var(--bg1); padding: 0 4px; border-radius: 3px;
+    color: var(--accent); font-size: 10.5px;
+  }
+
+  /* ============================================================
+   * 焦点环 (无障碍)
+   * ============================================================ */
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+</style>
+</head>
+<body>
+
+<div class="page">
+  <!-- 页面标题 -->
+  <header class="page-header">
+    <div>
+      <h1 class="page-title">NewsTimeline 组件原型</h1>
+      <p class="page-subtitle">
+        基金分析仪表盘 · 净值图下方的时间轴组件 · 将用于 <code>client/src/components/NewsTimeline.tsx</code>
+      </p>
+    </div>
+    <div class="toolbar">
+      <div class="scene-tabs" role="tablist" aria-label="演示场景">
+        <button class="scene-tab active" data-scene="A" role="tab">A · 色彩区分</button>
+        <button class="scene-tab" data-scene="B" role="tab">B · 密集避让</button>
+        <button class="scene-tab" data-scene="C" role="tab">C · 暗色主题</button>
+      </div>
+      <button class="theme-toggle" id="themeToggle" aria-label="切换主题">
+        <span class="icon">◐</span>
+        <span id="themeLabel">暗色</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- 场景 A: 色彩区分 -->
+  <section class="scene" id="scene-A" data-theme-scope="light">
+    <div class="scene-meta">
+      <span class="scene-tag">SCENE A</span>
+      <h2 class="scene-title">3 个基金 · 4 个稀疏锚点</h2>
+      <p class="scene-desc">展示多基金色彩区分 + impact 着色 + 气泡方向避让。横向悬停查看 Tooltip。</p>
+    </div>
+
+    <div class="mock-chart" id="chart-A">
+      <svg viewBox="0 0 800 120" preserveAspectRatio="none">
+        <line class="grid-line" x1="0" y1="30" x2="800" y2="30"/>
+        <line class="grid-line" x1="0" y1="60" x2="800" y2="60"/>
+        <line class="grid-line" x1="0" y1="90" x2="800" y2="90"/>
+        <path class="series" d="M0,90 C50,85 100,75 180,80 S300,60 380,55 S500,40 600,45 S700,30 800,25" stroke="#2563eb"/>
+        <text class="axis-label" x="6" y="14">易方达蓝筹精选</text>
+        <path class="series" d="M0,95 C80,90 160,88 240,80 S380,70 460,72 S580,55 680,50 S760,48 800,40" stroke="#d97706"/>
+        <text class="axis-label" x="6" y="28">招商中证白酒</text>
+        <path class="series" d="M0,100 C100,95 200,85 320,70 S500,65 600,72 S720,80 800,85" stroke="#7c3aed"/>
+        <text class="axis-label" x="6" y="42">华夏半导体</text>
+        <line class="cursor" id="cursor-A" x1="0" y1="0" x2="0" y2="120"/>
+      </svg>
+    </div>
+
+    <div class="nt-root" id="timeline-A" data-x-start="2026-01-05" data-x-end="2026-08-12" tabindex="-1">
+      <div class="nt-canvas" id="canvas-A">
+        <div class="nt-baseline"></div>
+        <!-- 锚点由 JS 注入 -->
+        <div class="nt-range-track">
+          <div class="nt-range-selected"></div>
+          <div class="nt-range-handle" data-handle="left" style="left: 0%"></div>
+          <div class="nt-range-handle" data-handle="right" style="left: 100%"></div>
+        </div>
+        <div class="nt-range-reset-hint">双击空白处重置 · 拖动 <kbd>●</kbd> 调整范围</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 场景 B: 密集避让 -->
+  <section class="scene" id="scene-B" hidden>
+    <div class="scene-meta">
+      <span class="scene-tag">SCENE B</span>
+      <h2 class="scene-title">2 个基金 · 10 个密集锚点</h2>
+      <p class="scene-desc">展示气泡上/下两排交替避让 + 圆点缩小 + 相邻 &lt; 3 天的合并为 N 条。横向滚动查看全部。</p>
+    </div>
+
+    <div class="mock-chart" id="chart-B">
+      <svg viewBox="0 0 1200 120" preserveAspectRatio="none">
+        <line class="grid-line" x1="0" y1="30" x2="1200" y2="30"/>
+        <line class="grid-line" x1="0" y1="60" x2="1200" y2="60"/>
+        <line class="grid-line" x1="0" y1="90" x2="1200" y2="90"/>
+        <path class="series" d="M0,100 C80,95 160,80 280,75 S480,60 620,55 S800,45 1000,40 S1150,38 1200,30" stroke="#2563eb"/>
+        <path class="series" d="M0,90 C100,92 220,80 360,85 S560,75 720,80 S940,90 1100,88 S1180,85 1200,82" stroke="#db2777"/>
+        <line class="cursor" id="cursor-B" x1="0" y1="0" x2="0" y2="120"/>
+      </svg>
+    </div>
+
+    <div class="nt-root" id="timeline-B" data-x-start="2025-12-15" data-x-end="2026-08-12" tabindex="-1">
+      <div class="nt-canvas" id="canvas-B" style="min-width: 1100px;">
+        <div class="nt-baseline"></div>
+        <div class="nt-range-track">
+          <div class="nt-range-selected"></div>
+          <div class="nt-range-handle" data-handle="left" style="left: 0%"></div>
+          <div class="nt-range-handle" data-handle="right" style="left: 100%"></div>
+        </div>
+        <div class="nt-range-reset-hint">双击空白处重置 · 拖动 <kbd>●</kbd> 调整范围</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 场景 C: 暗色主题 -->
+  <section class="scene" id="scene-C" hidden>
+    <div class="scene-meta">
+      <span class="scene-tag">SCENE C</span>
+      <h2 class="scene-title">暗色主题 · 5 个混合基金锚点</h2>
+      <p class="scene-desc">展示暗色模式下的色彩对比。所有颜色都通过 CSS 变量自动切换。</p>
+    </div>
+
+    <div class="mock-chart" id="chart-C">
+      <svg viewBox="0 0 900 120" preserveAspectRatio="none">
+        <line class="grid-line" x1="0" y1="30" x2="900" y2="30"/>
+        <line class="grid-line" x1="0" y1="60" x2="900" y2="60"/>
+        <line class="grid-line" x1="0" y1="90" x2="900" y2="90"/>
+        <path class="series" d="M0,95 C100,80 200,70 320,60 S520,40 680,45 S820,55 900,50" stroke="#60a5fa"/>
+        <path class="series" d="M0,90 C150,85 300,75 450,70 S700,60 900,55" stroke="#fbbf24"/>
+        <path class="series" d="M0,100 C100,95 250,92 400,85 S650,78 900,75" stroke="#c084fc"/>
+        <line class="cursor" id="cursor-C" x1="0" y1="0" x2="0" y2="120"/>
+      </svg>
+    </div>
+
+    <div class="nt-root" id="timeline-C" data-x-start="2026-02-01" data-x-end="2026-08-12" tabindex="-1">
+      <div class="nt-canvas" id="canvas-C">
+        <div class="nt-baseline"></div>
+        <div class="nt-range-track">
+          <div class="nt-range-selected"></div>
+          <div class="nt-range-handle" data-handle="left" style="left: 0%"></div>
+          <div class="nt-range-handle" data-handle="right" style="left: 100%"></div>
+        </div>
+        <div class="nt-range-reset-hint">双击空白处重置 · 拖动 <kbd>●</kbd> 调整范围</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Console 面板 -->
+  <div class="console">
+    <div class="console-head">
+      <span class="console-title">交互日志</span>
+      <button class="console-clear" id="consoleClear">清空</button>
+    </div>
+    <div class="console-body" id="consoleBody">
+      <div class="console-line">
+        <span class="console-time">[--:--:--]</span>
+        <span class="console-msg">提示: 悬停圆点、单击、右键、拖动滑块都会触发回调并记录在这里。</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Tooltip 容器 (单例) -->
+<div class="nt-tooltip" id="tooltip" role="tooltip" aria-hidden="true"></div>
+
+<script>
+/* ================================================================
+ * 数据准备 — 三个场景的锚点(模拟从 storage.getAnchors() 获取)
+ * ================================================================ */
+const FUND_COLORS = {
+  '005827': { name: '易方达蓝筹精选', idx: 1 },
+  '161725': { name: '招商中证白酒',   idx: 2 },
+  '159995': { name: '华夏半导体',     idx: 3 },
+  '012543': { name: '华夏新能源车',   idx: 4 },
+  '008888': { name: '国联安半导体',   idx: 5 },
+};
+
+// A 股惯例: 红涨绿跌 → impact-positive=涨(绿)/negative=跌(红)
+const SCENES = {
+  A: {
+    canvasId: 'canvas-A',
+    xStart: '2026-01-05',
+    xEnd:   '2026-08-12',
+    anchors: [
+      { id: 'a1', date: '2026-02-14', fundCode: '005827', summary: '蓝筹回暖', title: '白酒板块带动蓝筹回升, 北向资金净流入', impact: 'positive', source: 'GDELT' },
+      { id: 'a2', date: '2026-04-22', fundCode: '161725', summary: '白酒回调', title: '高端白酒批价走弱, 板块情绪转冷',         impact: 'negative', source: 'GDELT' },
+      { id: 'a3', date: '2026-06-18', fundCode: '159995', summary: '芯片反弹', title: '存储芯片涨价预期升温, 半导体板块走强',   impact: 'positive', source: 'GDELT' },
+      { id: 'a4', date: '2026-07-30', fundCode: '012543', summary: '销量新高', title: '新能源车月度销量创新高, 渗透率突破',     impact: 'positive', source: 'GDELT' },
+    ],
+  },
+  B: {
+    canvasId: 'canvas-B',
+    xStart: '2025-12-15',
+    xEnd:   '2026-08-12',
+    anchors: [
+      { id: 'b1',  date: '2026-01-10', fundCode: '005827', summary: '蓝筹企稳', impact: 'neutral',  title: '大盘蓝筹企稳, 成交量温和放大' },
+      { id: 'b2',  date: '2026-01-12', fundCode: '005827', summary: '回调',    impact: 'negative', title: '获利回吐压力, 蓝筹板块小幅回调' },
+      { id: 'b3',  date: '2026-02-14', fundCode: '005827', summary: '蓝筹回暖', impact: 'positive', title: '白酒板块带动蓝筹回升' },
+      { id: 'b4',  date: '2026-03-08', fundCode: '005827', summary: '震荡',    impact: 'neutral',  title: '指数震荡整理, 等待方向' },
+      { id: 'b5',  date: '2026-03-09', fundCode: '005827', summary: '放量',    impact: 'positive', title: '蓝筹放量上涨, 突破压力位' },
+      { id: 'b6',  date: '2026-04-22', fundCode: '161725', summary: '白酒回调', impact: 'negative', title: '高端白酒批价走弱' },
+      { id: 'b7',  date: '2026-04-23', fundCode: '161725', summary: '继续跌',   impact: 'negative', title: '板块情绪持续转冷' },
+      { id: 'b8',  date: '2026-05-18', fundCode: '005827', summary: '震荡',    impact: 'neutral',  title: '窄幅震荡, 成交量萎缩' },
+      { id: 'b9',  date: '2026-05-19', fundCode: '005827', summary: '政策利好', impact: 'positive', title: '稳增长政策预期升温' },
+      { id: 'b10', date: '2026-07-30', fundCode: '161725', summary: '估值修复', impact: 'positive', title: '白酒板块估值修复行情启动' },
+    ],
+  },
+  C: {
+    canvasId: 'canvas-C',
+    xStart: '2026-02-01',
+    xEnd:   '2026-08-12',
+    anchors: [
+      { id: 'c1', date: '2026-02-14', fundCode: '005827', summary: '蓝筹回暖',   impact: 'positive', title: '白酒板块带动蓝筹回升' },
+      { id: 'c2', date: '2026-03-22', fundCode: '008888', summary: '存储涨价',   impact: 'positive', title: 'DRAM 现货价持续上涨' },
+      { id: 'c3', date: '2026-05-08', fundCode: '005827', summary: '震荡',       impact: 'neutral',  title: '指数窄幅震荡, 等待方向' },
+      { id: 'c4', date: '2026-06-18', fundCode: '159995', summary: '芯片反弹',   impact: 'positive', title: '存储芯片涨价预期升温' },
+      { id: 'c5', date: '2026-07-30', fundCode: '012543', summary: '销量新高',   impact: 'positive', title: '新能源车销量创历史新高' },
+    ],
+  },
+};
+
+/* ================================================================
+ * 工具函数
+ * ================================================================ */
+const $  = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+
+const dateToTs  = (s) => new Date(s + 'T00:00:00').getTime();
+const tsToDate  = (ts) => new Date(ts);
+const fmtDate   = (s) => s;
+const fmtMD     = (s) => s.slice(5); // MM-DD
+const dayDiff   = (a, b) => Math.round((dateToTs(b) - dateToTs(a)) / 86400000);
+const fmtTime   = () => {
+  const d = new Date();
+  return `[${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}:${d.getSeconds().toString().padStart(2,'0')}]`;
+};
+
+/* 简单的 xScale 模拟 — 把日期映射到 [0, canvasWidth] */
+function buildXScale(start, end, width) {
+  const s = dateToTs(start), e = dateToTs(end);
+  return {
+    start, end, width,
+    scale(date) {
+      const t = dateToTs(date);
+      const r = (t - s) / (e - s);
+      return Math.max(0, Math.min(width, r * width));
+    },
+    invert(px) {
+      const r = px / width;
+      return new Date(s + r * (e - s));
+    },
+  };
+}
+
+/* 合并相邻 < 3 天的锚点(同基金) */
+function mergeCloseAnchors(anchors) {
+  if (anchors.length <= 10) return { groups: anchors.map(a => ({ items: [a], date: a.date })), merged: false };
+  const sorted = [...anchors].sort((a, b) => dateToTs(a.date) - dateToTs(b.date));
+  const groups = [];
+  let cur = null;
+  for (const a of sorted) {
+    if (cur && dayDiff(cur.date, a.date) < 3 && cur.fundCode === a.fundCode) {
+      cur.items.push(a);
+      cur.date = a.date; // 用最近日期定位
+    } else {
+      cur = { items: [a], date: a.date };
+      groups.push(cur);
+    }
+  }
+  return { groups, merged: true };
+}
+
+/* 气泡避让 — 基于水平距离判定上/下两排 */
+function placeBubbles(groups, xScale) {
+  const placements = [];
+  const minSpacing = 60; // 气泡最小水平间距(px)
+  let lastUpX = -Infinity, lastDownX = -Infinity;
+
+  for (const g of groups) {
+    const x = xScale.scale(g.date);
+    const text = g.items.length > 1 ? `${g.items.length} 条` : g.items[0].summary;
+    const width = Math.max(40, text.length * 12 + 24); // 估算气泡宽度
+
+    // 默认上方,若与上一上方气泡太近,改下方
+    let dir = 'up';
+    if (x - lastUpX < minSpacing) {
+      if (x - lastDownX >= minSpacing) {
+        dir = 'down';
+      } else if (x - lastUpX > x - lastDownX) {
+        dir = 'up';
+      } else {
+        dir = 'down';
+      }
+    }
+    if (dir === 'up') lastUpX = x + width / 2;
+    else lastDownX = x + width / 2;
+
+    placements.push({ group: g, x, dir, text, width });
+  }
+  return placements;
+}
+
+/* 渲染刻度: 按 canvas 宽度自适应步长, 避免过密；季度起点 major, 今天加粗主色+圆点 */
+function renderTicks(canvas, xScale) {
+  const sY = parseInt(xScale.start.slice(0,4));
+  const eY = parseInt(xScale.end.slice(0,4));
+  const totalDays = dayDiff(xScale.start, xScale.end);
+  const minSpacing = xScale.width < 500 ? 90 : xScale.width < 900 ? 65 : 50;
+  // 自适应步长
+  let stepMonths = 1;
+  for (const s of [1, 2, 3, 6]) {
+    const tickCount = (totalDays / 30) / s;
+    const needWidth = tickCount * minSpacing;
+    if (needWidth <= xScale.width) { stepMonths = s; break; }
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  const todayY = parseInt(today.slice(0, 4));
+  const todayM = parseInt(today.slice(5, 7));
+  for (let y = sY; y <= eY; y++) {
+    for (let m = 1; m <= 12; m += stepMonths) {
+      const d = `${y}-${String(m).padStart(2,'0')}-15`;
+      if (d < xScale.start || d > xScale.end) continue;
+      const x = xScale.scale(d);
+      const isMajor = stepMonths === 1 ? (m === 1 || m === 4 || m === 7 || m === 10) : true;
+      const isToday = today >= xScale.start && today <= xScale.end && y === todayY && m === todayM;
+      // 刻度线
+      const tick = document.createElement('div');
+      tick.className = 'nt-tick' + (isMajor ? '' : ' minor') + (isToday ? ' today' : '');
+      tick.style.left = x + 'px';
+      canvas.appendChild(tick);
+      // 文字标签(仅 major 显示)
+      if (isMajor) {
+        const lbl = document.createElement('div');
+        lbl.className = 'nt-tick-label' + (isToday ? ' today' : '');
+        lbl.style.left = x + 'px';
+        lbl.textContent = stepMonths >= 3 ? `${y}` : isMajor ? `${y}.${String(m).padStart(2,'0')}` : '';
+        canvas.appendChild(lbl);
+      }
+      // 今天: 加粗主色 + 圆点
+      if (isToday) {
+        const dot = document.createElement('div');
+        dot.className = 'nt-tick-today-dot';
+        dot.style.left = x + 'px';
+        dot.title = '今天';
+        canvas.appendChild(dot);
+      }
+    }
+  }
+}
+
+/* 渲染圆点 + 气泡 */
+function renderAnchors(canvas, groups, placements, xScale) {
+  const dense = groups.length > 5;
+  for (let i = 0; i < placements.length; i++) {
+    const p = placements[i];
+    const sample = p.group.items[0];
+    const fundIdx = FUND_COLORS[sample.fundCode]?.idx ?? 1;
+    const isMerged = p.group.items.length > 1;
+
+    // 圆点
+    const dot = document.createElement('div');
+    dot.className = `nt-dot impact-${sample.impact || 'neutral'} fund-${fundIdx}`;
+    if (dense) dot.classList.add('dense');
+    if (isMerged) dot.classList.add('merged');
+    dot.style.left = p.x + 'px';
+    dot.setAttribute('role', 'button');
+    dot.setAttribute('tabindex', '0');
+    dot.setAttribute('aria-label',
+      `${sample.date} ${sample.summary} 基金 ${FUND_COLORS[sample.fundCode]?.name ?? sample.fundCode} ${impactLabel(sample.impact)}`);
+    dot.dataset.groupIdx = i;
+
+    if (isMerged) {
+      const cnt = document.createElement('span');
+      cnt.className = 'nt-dot-count';
+      cnt.textContent = p.group.items.length;
+      dot.appendChild(cnt);
+    }
+    canvas.appendChild(dot);
+
+    // 气泡: 影响符号 + 简述 + 基金代码 (3 维数据, 紧凑单行)
+    const impactSymbol = sample.impact === 'positive' ? '↑' : sample.impact === 'negative' ? '↓' : '−';
+    const impactColorClass = sample.impact === 'positive' ? 'pos' : sample.impact === 'negative' ? 'neg' : 'neu';
+    const bubble = document.createElement('div');
+    bubble.className = `nt-bubble ${p.dir} fund-${fundIdx}`;
+    bubble.style.left = p.x + 'px';
+    bubble.innerHTML = `
+      <span class="fund-stripe"></span>
+      <span class="impact-sym ${impactColorClass}">${impactSymbol}</span>
+      <span>${p.text}</span>
+      <span class="fund-code">${sample.fundCode}</span>
+    `;
+    canvas.appendChild(bubble);
+  }
+}
+
+function impactLabel(imp) {
+  return imp === 'positive' ? '正面影响' : imp === 'negative' ? '负面影响' : '中性';
+}
+
+/* ================================================================
+ * 渲染单个场景
+ * ================================================================ */
+function renderScene(key) {
+  const scene = SCENES[key];
+  const canvas = document.getElementById(scene.canvasId);
+  if (!canvas) return;
+  // 清空(保留 baseline/track)
+  $$('.nt-dot, .nt-bubble, .nt-tick, .nt-tick-label', canvas).forEach(n => n.remove());
+
+  // canvas 宽度
+  const width = canvas.clientWidth;
+  const xScale = buildXScale(scene.xStart, scene.xEnd, width);
+
+  // 渲染刻度
+  renderTicks(canvas, xScale);
+
+  // 合并 / 避让
+  const { groups, merged } = mergeCloseAnchors(scene.anchors);
+  const placements = placeBubbles(groups, xScale);
+
+  renderAnchors(canvas, groups, placements, xScale);
+
+  // 保存到 dataset 供事件使用
+  canvas._scene = { key, xScale, groups, placements, merged };
+
+  // 绑定事件
+  bindTimelineEvents(key);
+}
+
+/* ================================================================
+ * Tooltip & 事件
+ * ================================================================ */
+const tooltip = $('#tooltip');
+let currentScene = null;
+
+function showTooltip(anchor, group, x, y, scene) {
+  const sample = group.items[0];
+  const fundIdx = FUND_COLORS[sample.fundCode]?.idx ?? 1;
+  const fundName = FUND_COLORS[sample.fundCode]?.name ?? sample.fundCode;
+  const ids = group.items.map(a => a.id).join(', ');
+
+  tooltip.innerHTML = `
+    <div class="nt-tooltip-head">
+      <span class="nt-tooltip-date">${sample.date}</span>
+      <span class="nt-tooltip-impact ${sample.impact || 'neutral'}">${impactLabel(sample.impact)}</span>
+    </div>
+    <h4 class="nt-tooltip-summary">
+      <span class="fund-stripe" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--series-${fundIdx});margin-right:6px;vertical-align:1px;"></span>
+      ${group.items.length > 1 ? `${group.items.length} 条聚合` : sample.summary}
+    </h4>
+    <p class="nt-tooltip-title">${sample.title}</p>
+    <p class="nt-tooltip-fund fund-${fundIdx}">
+      <span class="fund-stripe"></span>${fundName} (${sample.fundCode})${group.items.length > 1 ? ` · ids: ${ids}` : ''}
+    </p>
+    <div class="nt-tooltip-stats">
+      <span title="完整报告字数">📄 ${sample.text?.length ?? 0} 字</span>
+      <span title="距离今天的天数">距今 ${Math.max(0, dayDiff(sample.date, new Date().toISOString().slice(0,10)))} 天</span>
+      <span title="该基金累计锚点条数">同基金 ${SCENES[currentScene].anchors.filter(a => a.fundCode === sample.fundCode).length} 条</span>
+    </div>
+    <div class="nt-tooltip-actions">
+      <button class="nt-btn primary" data-action="jump" data-ids="${ids}">↪ 跳转图表</button>
+      <button class="nt-btn danger"  data-action="remove" data-ids="${ids}">解除锚定</button>
+    </div>
+  `;
+  tooltip.classList.add('visible');
+  tooltip.setAttribute('aria-hidden', 'false');
+
+  // 定位(避免溢出)
+  const tw = tooltip.offsetWidth, th = tooltip.offsetHeight;
+  let left = x + 12, top = y - th - 8;
+  if (left + tw > window.innerWidth - 8) left = x - tw - 12;
+  if (top < 8) top = y + 16;
+  tooltip.style.left = left + 'px';
+  tooltip.style.top  = top  + 'px';
+}
+function hideTooltip() {
+  tooltip.classList.remove('visible');
+  tooltip.setAttribute('aria-hidden', 'true');
+}
+
+function logEvent(tag, msg) {
+  const body = $('#consoleBody');
+  const line = document.createElement('div');
+  line.className = 'console-line';
+  const tagLabels = { click: 'CLICK', remove: 'REMOVE', range: 'RANGE', theme: 'THEME', scene: 'SCENE' };
+  line.innerHTML = `
+    <span class="console-time">${fmtTime()}</span>
+    <span class="console-tag ${tag}">${tagLabels[tag] || tag}</span>
+    <span class="console-msg">${msg}</span>
+  `;
+  body.appendChild(line);
+  body.scrollTop = body.scrollHeight;
+}
+
+function bindTimelineEvents(sceneKey) {
+  const scene = SCENES[sceneKey];
+  const canvas = document.getElementById(scene.canvasId);
+  const root = canvas.closest('.nt-root');
+  if (canvas._bound) return;
+  canvas._bound = true;
+  currentScene = sceneKey;
+
+  // --- 圆点 悬停 / 焦点 / 单击 / 右键 ---
+  canvas.addEventListener('mouseover', (e) => {
+    const dot = e.target.closest('.nt-dot');
+    if (!dot) return;
+    const idx = +dot.dataset.groupIdx;
+    const scene = canvas._scene;
+    const p = scene.placements[idx];
+    const rect = dot.getBoundingClientRect();
+    showTooltip(dot, p.group, rect.left + rect.width / 2, rect.top, scene);
+  });
+  canvas.addEventListener('mouseout', (e) => {
+    const dot = e.target.closest('.nt-dot');
+    if (!dot) return;
+    if (e.relatedTarget && (e.relatedTarget.closest('.nt-tooltip') || e.relatedTarget.closest('.nt-dot'))) return;
+    hideTooltip();
+  });
+  canvas.addEventListener('click', (e) => {
+    const dot = e.target.closest('.nt-dot');
+    if (dot) {
+      const idx = +dot.dataset.groupIdx;
+      const scene = canvas._scene;
+      const p = scene.placements[idx];
+      const date = p.group.items[0].date;
+      const ids = p.group.items.map(a => a.id).join(', ');
+      logEvent('click', `onJumpTo(<code>${date}</code>) — 图表滚到该日并高亮竖线 (锚点 ${ids})`);
+      drawCursor(sceneKey, scene.xScale.scale(date));
+    } else if (e.target.closest('.nt-btn')) {
+      const btn = e.target.closest('.nt-btn');
+      const action = btn.dataset.action;
+      const ids = btn.dataset.ids;
+      if (action === 'jump') {
+        const scene = canvas._scene;
+        // 跳转到该组第一个锚点
+        const firstId = ids.split(', ')[0];
+        const p = scene.placements.find(pp => pp.group.items.some(a => a.id === firstId));
+        const date = p.group.items[0].date;
+        logEvent('click', `[tooltip] onJumpTo(<code>${date}</code>)`);
+        drawCursor(sceneKey, scene.xScale.scale(date));
+      } else if (action === 'remove') {
+        logEvent('remove', `onRemove(<code>${ids}</code>) — 从 storage 移除这些锚点`);
+        // 视觉演示:淡出后移除
+        ids.split(', ').forEach(id => {
+          const targets = $$('.nt-dot', canvas);
+          targets.forEach(d => {
+            if (d.getAttribute('aria-label')?.includes(id)) {
+              d.style.transition = 'opacity .3s ease, transform .3s ease';
+              d.style.opacity = '0';
+              d.style.transform += ' scale(.5)';
+              setTimeout(() => d.remove(), 320);
+            }
+          });
+        });
+        const bubbles = $$('.nt-bubble', canvas);
+        bubbles.forEach(b => { b.style.opacity = '0'; setTimeout(() => b.remove(), 320); });
+        hideTooltip();
+      }
+    }
+  });
+  canvas.addEventListener('contextmenu', (e) => {
+    const dot = e.target.closest('.nt-dot');
+    if (!dot) return;
+    e.preventDefault();
+    const idx = +dot.dataset.groupIdx;
+    const p = canvas._scene.placements[idx];
+    const ids = p.group.items.map(a => a.id).join(', ');
+    logEvent('remove', `[右键] onRemove(<code>${ids}</code>)`);
+    dot.style.transition = 'opacity .3s ease, transform .3s ease';
+    dot.style.opacity = '0';
+    dot.style.transform += ' scale(.5)';
+    setTimeout(() => dot.remove(), 320);
+    $$('.nt-bubble', canvas).forEach(b => { b.style.opacity = '0'; setTimeout(() => b.remove(), 320); });
+  });
+
+  // 键盘
+  canvas.addEventListener('keydown', (e) => {
+    const dot = e.target.closest('.nt-dot');
+    if (!dot) return;
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      dot.click();
+    }
+  });
+
+  // Tooltip 按钮交互
+  tooltip.addEventListener('click', (e) => {
+    const btn = e.target.closest('.nt-btn');
+    if (!btn) return;
+    const action = btn.dataset.action;
+    const ids = btn.dataset.ids;
+    const sceneData = canvas._scene;
+    if (action === 'jump') {
+      const firstId = ids.split(', ')[0];
+      const p = sceneData.placements.find(pp => pp.group.items.some(a => a.id === firstId));
+      if (!p) return;
+      const date = p.group.items[0].date;
+      logEvent('click', `[tooltip] onJumpTo(<code>${date}</code>)`);
+      drawCursor(sceneKey, sceneData.xScale.scale(date));
+    } else if (action === 'remove') {
+      logEvent('remove', `onRemove(<code>${ids}</code>) — 从 storage 移除这些锚点`);
+      hideTooltip();
+    }
+  });
+
+  // --- 双击空白处重置范围 ---
+  root.addEventListener('dblclick', (e) => {
+    if (e.target.closest('.nt-dot') || e.target.closest('.nt-range-handle')) return;
+    const handles = $$('.nt-range-handle', root);
+    handles[0].style.left = '0%';
+    handles[1].style.left = '100%';
+    updateRangeSelected(root);
+    logEvent('range', `onRangeChange(<code>${scene.xStart}</code>, <code>${scene.xEnd}</code>) — 双击重置为全区间`);
+  });
+
+  // --- 范围滑块拖拽 ---
+  bindRangeHandles(root, scene);
+}
+
+function drawCursor(sceneKey, x) {
+  const cursor = document.getElementById(`cursor-${sceneKey}`);
+  if (!cursor) return;
+  const chart = cursor.parentElement;
+  const w = chart.clientWidth;
+  // x 来自 xScale(在 canvas 内),需要换算到 svg 的 viewBox
+  const canvas = document.getElementById(SCENES[sceneKey].canvasId);
+  const canvasW = canvas.clientWidth;
+  const svgX = (x / canvasW) * 1200; // viewBox 宽度
+  cursor.setAttribute('x1', svgX);
+  cursor.setAttribute('x2', svgX);
+  cursor.classList.add('active');
+  setTimeout(() => cursor.classList.remove('active'), 2500);
+}
+
+function bindRangeHandles(root, scene) {
+  const track = $('.nt-range-track', root);
+  const handles = $$('.nt-range-handle', track.parentElement);
+  let dragging = null;
+
+  const onMove = (e) => {
+    if (!dragging) return;
+    const rect = track.getBoundingClientRect();
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    let pct = ((clientX - rect.left) / rect.width) * 100;
+    pct = Math.max(0, Math.min(100, pct));
+    const leftPct  = parseFloat(handles[0].style.left);
+    const rightPct = parseFloat(handles[1].style.left);
+    if (dragging === 'left'  && pct < rightPct - 5) handles[0].style.left = pct + '%';
+    if (dragging === 'right' && pct > leftPct + 5)  handles[1].style.left = pct + '%';
+    updateRangeSelected(root);
+  };
+  const onUp = () => {
+    if (dragging) {
+      const lp = parseFloat(handles[0].style.left) / 100;
+      const rp = parseFloat(handles[1].style.left) / 100;
+      const startTs = scene.xStart ? dateToTs(scene.xStart) : 0;
+      const endTs   = scene.xEnd   ? dateToTs(scene.xEnd)   : 1;
+      const start = tsToDate(startTs + (endTs - startTs) * lp).toISOString().slice(0,10);
+      const end   = tsToDate(startTs + (endTs - startTs) * rp).toISOString().slice(0,10);
+      logEvent('range', `onRangeChange(<code>${start}</code>, <code>${end}</code>) — 影响父组件 chart 缩放范围`);
+    }
+    dragging = null;
+  };
+  handles.forEach(h => {
+    h.addEventListener('mousedown', (e) => {
+      dragging = h.dataset.handle;
+      h.classList.add('active');
+      e.preventDefault();
+    });
+    h.addEventListener('touchstart', (e) => {
+      dragging = h.dataset.handle;
+      h.classList.add('active');
+    }, { passive: true });
+  });
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('touchmove', onMove, { passive: true });
+  document.addEventListener('mouseup', () => { handles.forEach(h => h.classList.remove('active')); onUp(); });
+  document.addEventListener('touchend', () => { handles.forEach(h => h.classList.remove('active')); onUp(); });
+}
+function updateRangeSelected(root) {
+  const handles = $$('.nt-range-handle', root);
+  const sel = $('.nt-range-selected', root);
+  const l = parseFloat(handles[0].style.left);
+  const r = parseFloat(handles[1].style.left);
+  sel.style.left = l + '%';
+  sel.style.width = (r - l) + '%';
+}
+
+/* ================================================================
+ * 主题切换 / 场景切换
+ * ================================================================ */
+const themeToggle = $('#themeToggle');
+const themeLabel  = $('#themeLabel');
+function setTheme(mode) {
+  document.documentElement.setAttribute('data-theme', mode);
+  themeLabel.textContent = mode === 'dark' ? '亮色' : '暗色';
+  logEvent('theme', `切换到 <code>${mode}</code> 主题`);
+  // 场景 C 是暗色专属,自动跳转
+  if (mode === 'dark' && !document.getElementById('scene-C').hidden === false) {
+    // 不自动跳,让用户自由选择
+  }
+}
+themeToggle.addEventListener('click', () => {
+  const cur = document.documentElement.getAttribute('data-theme');
+  setTheme(cur === 'dark' ? 'light' : 'dark');
+});
+
+const sceneTabs = $$('.scene-tab');
+sceneTabs.forEach(tab => {
+  tab.addEventListener('click', () => {
+    const key = tab.dataset.scene;
+    sceneTabs.forEach(t => t.classList.toggle('active', t === tab));
+    $$('.scene').forEach(s => s.hidden = s.id !== `scene-${key}`);
+    logEvent('scene', `切换到场景 <code>${key}</code>`);
+    // 重新渲染(因为 canvas 宽度可能因 hidden 切换而变化)
+    setTimeout(() => renderScene(key), 50);
+  });
+});
+
+$('#consoleClear').addEventListener('click', () => {
+  $('#consoleBody').innerHTML = '';
+});
+
+/* 窗口大小变化时重新渲染(保持圆点位置准确) */
+let resizeTimer;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    const active = sceneTabs.find(t => t.classList.contains('active'));
+    if (active) renderScene(active.dataset.scene);
+  }, 150);
+});
+
+/* ================================================================
+ * 启动
+ * ================================================================ */
+renderScene('A');
+setTheme('light');
+logEvent('theme', '初始化 — 默认 <code>light</code> 主题,场景 <code>A</code>');
+</script>
+</body>
+</html>

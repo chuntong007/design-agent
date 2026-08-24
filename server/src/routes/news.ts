@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { searchNews } from '../services/news'
-import { searchNewsByLLMStream } from '../services/news-llm'
+import { searchNewsByLLMStream, chatNewsByLLMStream } from '../services/news-llm'
 import { translateText } from '../services/translate'
 import { inferFundSector } from '../services/sector'
 import type { StreamEvent } from '../services/llm'
@@ -220,5 +220,111 @@ newsRoutes.post('/translate', async (req, res) => {
     res.json({ ok: true, data: translated })
   } catch (err) {
     res.status(500).json({ ok: false, error: (err as Error).message })
+  }
+})
+
+// 对话延伸（SSE）：POST /api/news/chat/stream
+// body: { date, fundCodes: string[], report: string, history: ChatMessageInput[], question: string }
+// 基于已生成的分析报告继续追问，LLM 可继续调用 web_search 检索新信息
+// 事件序列与 /search/stream 一致（reasoning_delta / output_delta / ... / done）
+newsRoutes.post('/chat/stream', async (req, res) => {
+  const { date, fundCodes, report, history, question } = req.body || {}
+  if (!date || !question || !report) {
+    res.status(400).json({ ok: false, error: 'date, report, question required' })
+    return
+  }
+
+  const codes: string[] = Array.isArray(fundCodes) ? fundCodes.filter(Boolean) : []
+
+  // SSE 头
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Connection', 'keep-alive')
+  res.setHeader('X-Accel-Buffering', 'no')
+  res.flushHeaders()
+
+  const sendEvent = (event: string, data: unknown) => {
+    res.write(`event: ${event}\n`)
+    res.write(`data: ${JSON.stringify(data)}\n\n`)
+  }
+
+  // 注意：POST 请求 body 被 express.json() 消费后 req 即触发 close 事件，
+  // 必须监听 res 的 close（代表客户端连接断开），否则路由会被误判为客户端已离开
+  let clientClosed = false
+  res.on('close', () => {
+    clientClosed = true
+  })
+
+  try {
+    console.error(`[chat-stream] request received, codes: ${codes.join(',')}, question: ${String(question).slice(0, 30)}`)
+    // 领域识别（多基金并行）
+    // 注意：inferFundSector 依赖外部 API（无超时），冷缓存时可能挂起；
+    // 对话场景不强依赖领域信息，加 8 秒超时保护，超时则以空领域继续
+    let fundInfos: Array<{ code: string; name: string; sectors: string[] }> = []
+    if (codes.length > 0) {
+      fundInfos = await Promise.all(
+        codes.map(async (code) => {
+          const sector = await Promise.race([
+            inferFundSector(code),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 8000)),
+          ]).catch(() => null)
+          if (!sector) return { code, name: '', sectors: [] }
+          return { code, name: sector.name, sectors: sector.keywords }
+        })
+      )
+    }
+    if (clientClosed) return
+    console.error(`[chat-stream] sector inferred, fundInfos: ${fundInfos.length}`)
+
+    // 规整 history（只保留合法轮次）
+    const safeHistory = (Array.isArray(history) ? history : [])
+      .filter((m: { role?: string; content?: string }) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+      .map((m: { role: 'user' | 'assistant'; content: string }) => ({ role: m.role, content: m.content }))
+
+    sendEvent('status', { stage: 'analyzing', message: '正在思考你的问题...' })
+
+    await chatNewsByLLMStream(
+      String(date),
+      fundInfos,
+      String(report),
+      safeHistory,
+      String(question),
+      (event: StreamEvent) => {
+        if (clientClosed) return
+        switch (event.type) {
+          case 'status':
+            sendEvent('status', { stage: event.stage, message: event.message })
+            break
+          case 'sources':
+            sendEvent('sources', { urls: event.urls })
+            break
+          case 'reasoning_delta':
+            sendEvent('reasoning_delta', { text: event.text })
+            break
+          case 'reasoning_done':
+            sendEvent('reasoning_done', { text: event.text })
+            break
+          case 'output_delta':
+            sendEvent('output_delta', { text: event.text })
+            break
+          case 'output_done':
+            sendEvent('output_done', { text: event.text })
+            break
+          case 'complete':
+            sendEvent('complete', { text: event.text, reasoning: event.reasoning })
+            break
+          case 'error':
+            sendEvent('error', { message: event.message })
+            break
+        }
+      }
+    )
+
+    if (!clientClosed) sendEvent('done', {})
+  } catch (err) {
+    if (!clientClosed) {
+      sendEvent('error', { message: (err as Error).message })
+      sendEvent('done', {})
+    }
   }
 })

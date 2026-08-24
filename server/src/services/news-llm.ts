@@ -121,6 +121,110 @@ function buildPrompt(
   return { input, instructions }
 }
 
+// ===== 对话延伸：基于已有分析报告的追问 =====
+// 用户在报告生成后继续提问，支持多轮上下文与 web_search 联网补充检索
+
+export interface ChatMessageInput {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+function buildChatPrompt(
+  date: string,
+  funds: Array<{ code: string; name: string; sectors: string[] }>,
+  reportText: string,
+  history: ChatMessageInput[],
+  question: string
+): { input: string; instructions: string } {
+  const fundLines = funds
+    .map((f) => {
+      const sectors = f.sectors.length > 0 ? f.sectors.join('、') : '混合/宽基'
+      return `- ${f.name || '未知'} (${f.code}) - 领域: ${sectors}`
+    })
+    .join('\n')
+
+  const historyText =
+    history.length > 0
+      ? history
+          .slice(-8) // 最近 8 轮，控制上下文长度
+          .map((m) => `${m.role === 'user' ? '用户' : '分析师'}: ${m.content}`)
+          .join('\n\n')
+      : '（无，这是首个追问）'
+
+  const input = [
+    `背景: 你在 ${date} 前后为以下基金做过新闻归因分析`,
+    `基金组合(共 ${funds.length} 支):`,
+    fundLines,
+    '',
+    '=== 此前的分析报告全文 ===',
+    reportText,
+    '=== 报告结束 ===',
+    '',
+    '=== 此前的追问对话 ===',
+    historyText,
+    '=== 对话结束 ===',
+    '',
+    `用户的新问题: ${question}`,
+    '',
+    '请基于报告上下文回答用户问题。',
+    '如果问题涉及报告之外的新信息（如事件后续进展、最新数据、相关背景）',
+    '请主动使用 web_search 工具检索后再回答，并注明信息来源。',
+    '回答保持简洁专业，用 Markdown 格式组织。',
+  ].join('\n')
+
+  const instructions =
+    '你是基金新闻归因分析师，此前刚完成一份新闻归因分析报告。'
+    + '用户现在基于该报告进行追问，请结合报告上下文与此前对话历史回答。'
+    + '对于报告内已有信息，直接深入展开解释；对于报告外的新问题'
+    + '（如"后续进展如何"、"XX政策会怎么影响"），主动使用 web_search 检索最新信息后回答。'
+    + '回答用中文，Markdown 格式，简洁专业，不要重复报告已有内容，聚焦回答问题本身。'
+
+  return { input, instructions }
+}
+
+// ===== 对话延伸流式入口 =====
+// 与 searchNewsByLLMStream 同构：透传 reasoning/output delta，供路由层转 SSE
+
+export async function chatNewsByLLMStream(
+  date: string,
+  funds: Array<{ code: string; name: string; sectors: string[] }>,
+  reportText: string,
+  history: ChatMessageInput[],
+  question: string,
+  onEvent: (event: StreamEvent) => void
+): Promise<LLMNewsResult> {
+  const { input, instructions } = buildChatPrompt(date, funds, reportText, history, question)
+
+  let finalText = ''
+  let finalReasoning = ''
+  const collectedSources: string[] = []
+
+  await callResponsesAPIStream(input, instructions, (event) => {
+    switch (event.type) {
+      case 'sources':
+        collectedSources.push(...event.urls)
+        break
+      case 'complete':
+        finalText = event.text
+        finalReasoning = event.reasoning
+        break
+      case 'reasoning_done':
+        finalReasoning = event.text
+        break
+      case 'output_done':
+        finalText = event.text
+        break
+    }
+    onEvent(event)
+  })
+
+  return {
+    text: finalText,
+    reasoning: finalReasoning,
+    sources: collectedSources,
+  }
+}
+
 // ===== 主入口：用 LLM + web_search 检索并归因分析新闻（非流式，降级用）=====
 
 export async function searchNewsByLLM(

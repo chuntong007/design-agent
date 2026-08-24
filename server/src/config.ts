@@ -22,7 +22,7 @@ export const config = {
     // 模型由 CC-Switch 默认配置决定，业务系统不指定
     // 仅在需要显式覆盖时通过环境变量 LLM_MODEL 传入
     get model() { return process.env.LLM_MODEL || '' },
-    get timeout() { return Number(process.env.LLM_TIMEOUT) || 60000 },
+    get timeout() { return Number(process.env.LLM_TIMEOUT) || 300000 },
   },
 }
 

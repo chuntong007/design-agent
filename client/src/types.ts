@@ -87,6 +87,15 @@ export interface PerFundImpact {
   reason: string
 }
 
+// 【对话延伸】基于报告的多轮追问消息
+export interface ChatMessage {
+  role: 'user' | 'assistant'
+  content: string
+  reasoning?: string // assistant 思考过程（流式）
+  loading?: boolean // assistant 生成中
+  error?: string // 生成失败信息
+}
+
 export interface NewsSession {
   id: string // 会话唯一 ID（date-fundCode-timestamp）
   date: string // 检索日期 YYYY-MM-DD
@@ -101,6 +110,10 @@ export interface NewsSession {
   error: string
   status: { stage: string; message: string } | null
   createdAt: number
+  // 【对话延伸】报告生成后的多轮追问（运行时状态，不持久化）
+  chat?: ChatMessage[]
+  // 对话延伸中新增的来源 URL（追问触发的 web_search）
+  chatSources?: string[]
   // 多基金同步检索标识(同时为多支基金创建会话时为 true), 头部徽章据此显示
   isMultiFundSession?: boolean
   // 多基金批次 ID: 同批次创建的会话共享此 ID, 便于整批取消/重建

@@ -72,17 +72,48 @@ export function searchNewsStream(
   fundCodes: string[],
   onEvent: (evt: NewsStreamEvent) => void
 ): AbortController {
-  const controller = new AbortController()
   const codes = fundCodes.join(',')
   const path = `/news/search/stream?date=${encodeURIComponent(date)}&fundCodes=${encodeURIComponent(codes)}`
+  return consumeSSEStream('GET', path, undefined, onEvent)
+}
+
+// 【对话延伸】基于报告的多轮追问（SSE 流式，POST）
+// payload: { date, fundCodes, report, history, question }
+// 直连后端 8787（同 searchNewsStream 理由：绕过 Vite 代理缓冲）
+export function chatNewsStream(
+  payload: {
+    date: string
+    fundCodes: string[]
+    report: string
+    history: { role: 'user' | 'assistant'; content: string }[]
+    question: string
+  },
+  onEvent: (evt: NewsStreamEvent) => void
+): AbortController {
+  return consumeSSEStream('POST', '/news/chat/stream', JSON.stringify(payload), onEvent)
+}
+
+// SSE 消费通用实现（GET/POST 共用）
+function consumeSSEStream(
+  method: 'GET' | 'POST',
+  path: string,
+  body: string | undefined,
+  onEvent: (evt: NewsStreamEvent) => void
+): AbortController {
+  const controller = new AbortController()
   // 直连后端：开发环境用 8787，生产环境用同源（由反向代理处理）
   const streamBase = import.meta.env.DEV ? 'http://localhost:8787/api' : BASE
 
   ;(async () => {
     try {
       const res = await fetch(`${streamBase}${path}`, {
+        method,
         signal: controller.signal,
-        headers: { Accept: 'text/event-stream' },
+        headers: {
+          Accept: 'text/event-stream',
+          ...(body ? { 'Content-Type': 'application/json' } : {}),
+        },
+        ...(body ? { body } : {}),
       })
       if (!res.ok || !res.body) {
         throw new Error(`Stream request failed: HTTP ${res.status}`)
@@ -91,7 +122,6 @@ export function searchNewsStream(
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
-      let currentEvent = ''
 
       while (true) {
         const { done, value } = await reader.read()
@@ -126,7 +156,6 @@ export function searchNewsStream(
           } catch {
             // 解析失败跳过
           }
-          void currentEvent
         }
       }
     } catch (err) {

@@ -23,6 +23,9 @@ export interface NewsTimelineProps {
   xStart: string // YYYY-MM-DD
   xEnd: string // YYYY-MM-DD
   xScale?: (date: string) => number // 可选：父图表传入的 Recharts xScale(date) -> pixel
+  // 【缩放联动】父图表当前可视日期区间（受控）；未传时滑块自治（兼容旧用法）
+  viewStart?: string
+  viewEnd?: string
   onJumpTo?: (date: string, anchorId: string) => void
   onRemove?: (anchorId: string) => void
   onRangeChange?: (start: string, end: string) => void
@@ -177,6 +180,8 @@ export function NewsTimeline({
   xStart,
   xEnd,
   xScale,
+  viewStart,
+  viewEnd,
   onJumpTo,
   onRemove,
   onRangeChange,
@@ -189,9 +194,36 @@ export function NewsTimeline({
   const rootRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLDivElement | null>(null)
   const [width, setWidth] = useState(0)
-  // 范围滑块状态：左右手柄位置 [0, 100]
-  const [leftPct, setLeftPct] = useState(0)
-  const [rightPct, setRightPct] = useState(100)
+  // 拖拽状态（'left'/'right' 手柄），滑块联动逻辑依赖，需先声明
+  const [dragging, setDragging] = useState<null | 'left' | 'right'>(null)
+  // 【缩放联动】滑块百分比：viewStart/viewEnd 受控优先；拖拽中用本地值即时反馈
+  const isControlled = viewStart !== undefined && viewEnd !== undefined
+  const controlledLeftPct = useMemo(() => {
+    if (!isControlled || !viewStart) return 0
+    const total = dateToTs(xEnd) - dateToTs(xStart)
+    if (total <= 0) return 0
+    return Math.max(0, Math.min(100, ((dateToTs(viewStart) - dateToTs(xStart)) / total) * 100))
+  }, [isControlled, viewStart, xStart, xEnd])
+  const controlledRightPct = useMemo(() => {
+    if (!isControlled || !viewEnd) return 100
+    const total = dateToTs(xEnd) - dateToTs(xStart)
+    if (total <= 0) return 100
+    return Math.max(0, Math.min(100, ((dateToTs(viewEnd) - dateToTs(xStart)) / total) * 100))
+  }, [isControlled, viewEnd, xStart, xEnd])
+  // 本地拖拽值（非受控模式或拖拽中生效）
+  const [localLeftPct, setLocalLeftPct] = useState(0)
+  const [localRightPct, setLocalRightPct] = useState(100)
+  // 受控模式下：外部 view 变化时同步本地值
+  useEffect(() => {
+    if (isControlled) {
+      setLocalLeftPct(controlledLeftPct)
+      setLocalRightPct(controlledRightPct)
+    }
+  }, [isControlled, controlledLeftPct, controlledRightPct])
+  const leftPct = dragging !== null ? localLeftPct : isControlled ? controlledLeftPct : localLeftPct
+  const rightPct = dragging !== null ? localRightPct : isControlled ? controlledRightPct : localRightPct
+  const setLeftPct = setLocalLeftPct
+  const setRightPct = setLocalRightPct
   const [hovered, setHovered] = useState<{ placement: Placement; clientX: number; clientY: number } | null>(null)
   // 【Phase 2 增强】悬停基金:用于同基金关联高亮 + 其他基金淡化
   const [hoveredFundCode, setHoveredFundCode] = useState<string | null>(null)
@@ -202,7 +234,6 @@ export function NewsTimeline({
   const [clearConfirmOpenLocal, setClearConfirmOpenLocal] = useState(false)
   // 【Phase 2 增强】悬停离开延迟定时器
   const hoverLeaveTimerRef = useRef<number | null>(null)
-  const [dragging, setDragging] = useState<null | 'left' | 'right'>(null)
   const lastRangeEmittedRef = useRef<{ start: string; end: string } | null>(null)
 
   // 观察 canvas 宽度变化（窗口缩放、tab 切换等）
@@ -341,25 +372,38 @@ export function NewsTimeline({
     }
   }, [dragging, leftPct, rightPct])
 
-  // 滑块释放时回调 onRangeChange
+  // 滑块释放时回调 onRangeChange（受控模式下仅用户拖拽产生的变化需要上报）
   useEffect(() => {
     if (dragging !== null) return
-    if (leftPct === 0 && rightPct === 100) {
+    // 受控模式：外部回写后与受控值一致则不上报
+    if (isControlled) {
+      if (Math.abs(localLeftPct - controlledLeftPct) < 0.5 && Math.abs(localRightPct - controlledRightPct) < 0.5) {
+        lastRangeEmittedRef.current = null
+        return
+      }
+    }
+    if (localLeftPct === 0 && localRightPct === 100) {
+      const wasReset = lastRangeEmittedRef.current === null
       lastRangeEmittedRef.current = null
+      // 受控模式下从子区间拖回全量时上报重置
+      if (isControlled && !wasReset) {
+        lastRangeEmittedRef.current = { start: xStart, end: xEnd }
+        onRangeChange?.(xStart, xEnd)
+      }
       return
     }
     const startTs = dateToTs(xStart)
     const endTs = dateToTs(xEnd)
-    const start = new Date(startTs + (endTs - startTs) * (leftPct / 100)).toISOString().slice(0, 10)
-    const end = new Date(startTs + (endTs - startTs) * (rightPct / 100)).toISOString().slice(0, 10)
+    const start = new Date(startTs + (endTs - startTs) * (localLeftPct / 100)).toISOString().slice(0, 10)
+    const end = new Date(startTs + (endTs - startTs) * (localRightPct / 100)).toISOString().slice(0, 10)
     const last = lastRangeEmittedRef.current
     if (last && last.start === start && last.end === end) return
     lastRangeEmittedRef.current = { start, end }
     onRangeChange?.(start, end)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dragging, leftPct, rightPct])
+  }, [dragging, localLeftPct, localRightPct, isControlled, controlledLeftPct, controlledRightPct])
 
-  // 双击空白处重置
+  // 双击空白处重置（受控模式下同时通知父组件）
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
     const target = e.target as HTMLElement
     if (
@@ -369,9 +413,14 @@ export function NewsTimeline({
     ) {
       return
     }
-    setLeftPct(0)
-    setRightPct(100)
-  }, [])
+    setLocalLeftPct(0)
+    setLocalRightPct(100)
+    if (isControlled && (localLeftPct !== 0 || localRightPct !== 100)) {
+      lastRangeEmittedRef.current = { start: xStart, end: xEnd }
+      onRangeChange?.(xStart, xEnd)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isControlled, localLeftPct, localRightPct, xStart, xEnd, onRangeChange])
 
   // 圆点单击
   const handleDotClick = useCallback(

@@ -8,7 +8,11 @@ import { newsRoutes } from './routes/news'
 import { backtestRoutes } from './routes/backtest'
 
 const app = express()
-app.use(cors())
+// CORS：显式允许 POST（chat SSE 路由）及 JSON 头，避免预检失败导致 fetch 永久 pending
+app.use(cors({
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Accept'],
+}))
 app.use(express.json())
 
 app.get('/api/health', (_req, res) => {

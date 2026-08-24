@@ -112,6 +112,30 @@ export function NavChartPanel({
   const { palette: p, mode } = useTheme()
   const [hoveredPoint, setHoveredPoint] = useState<{ date: string; fundCode: string } | null>(null)
 
+  // ===== 区间缩放/平移状态 =====
+  // viewRange: chartData 的索引区间 [start, end)（end 为开区间）；null = 全量视图
+  // 由滚轮缩放 / 拖拽平移 / 时间轴滑块 三条路径共同驱动
+  const [viewRange, setViewRange] = useState<[number, number] | null>(null)
+  // 【防抖动关键】ref 镜像最新 viewRange + total：
+  // wheel/mousemove 事件频率高于 React 渲染频率，若用闭包捕获 state，
+  // 快速连续事件会交替命中新旧监听器（effect 重绑间隙），产生来回跳变。
+  // 所有高频事件处理器统一从 ref 读取最新值，写入走 setViewRange + 同步 ref
+  const viewRangeRef = useRef<[number, number] | null>(null)
+  const totalRef = useRef(0)
+  const setViewRangeSync = useCallback((next: [number, number] | null) => {
+    viewRangeRef.current = next
+    setViewRange(next)
+  }, [])
+  // 拖拽平移状态：记录按下时的鼠标 x 与当时的 viewRange
+  const dragStateRef = useRef<{ startX: number; startRange: [number, number] } | null>(null)
+  const [draggingChart, setDraggingChart] = useState(false)
+  const chartWrapRef = useRef<HTMLDivElement | null>(null)
+
+  // 数据变化（切换 range/模式/基金）时重置缩放，避免残留过期索引
+  useEffect(() => {
+    setViewRange(null)
+  }, [range, chartMode, funds.map((f) => f.code).join(',')])
+
   // 蛋卷 growth day 参数随区间切换（年初至今 -> ty）
   const day = RANGE_TO_DAY[range as RangeKey] ?? 'all'
 
@@ -197,6 +221,163 @@ export function NavChartPanel({
     xScaleRef.current = scale
   }, [])
 
+  // ===== 区间缩放/平移：视图数据切片 =====
+  // fullData 长度变化时收缩越界的 viewRange（防御性，正常由上方 useEffect 重置）
+  const total = aligned.chartData.length
+  const effectiveRange: [number, number] | null = useMemo(() => {
+    if (!viewRange) return null
+    const [s, e] = viewRange
+    if (e - s < 2 || s >= total) return null
+    return [Math.max(0, s), Math.min(total, e)]
+  }, [viewRange, total])
+  const viewData = useMemo(
+    () => (effectiveRange ? aligned.chartData.slice(effectiveRange[0], effectiveRange[1]) : aligned.chartData),
+    [aligned.chartData, effectiveRange]
+  )
+  // 当前可视日期区间（传给 NewsTimeline 联动滑块）
+  const viewDates = useMemo(() => {
+    const data = viewData.length > 0 ? viewData : aligned.chartData
+    return {
+      start: (data[0]?.date as string) || '',
+      end: (data[data.length - 1]?.date as string) || '',
+    }
+  }, [viewData, aligned.chartData])
+
+  // ===== 滚轮缩放：以鼠标 x 为锚点 =====
+  // 注意：React 的 onWheel 是 passive 事件，preventDefault 无效；
+  // 必须用原生 addEventListener({ passive: false }) 才能阻止页面滚动
+  // chartVisible：图表是否实际渲染（未走 EmptyState 早退）。
+  // 关键：growth 数据分批到达期间 total 可能已 >0 但图表仍显示 EmptyState，
+  // 图表真正渲染时 total/effectiveRange 可能都不变，必须靠 chartVisible 触发重绑监听
+  const growthPendingNow =
+    chartMode === 'return' &&
+    funds.some((f) => f.detail && !growthMap[`${f.code}:${day}`] && !growthErrors[`${f.code}:${day}`])
+  const chartVisible = funds.length > 0 && total > 0 && !growthPendingNow
+
+  useEffect(() => {
+    const wrap = chartWrapRef.current
+    if (!wrap) return
+    const onWheelNative = (e: WheelEvent) => {
+      if (total < 2) return
+      e.preventDefault()
+      const rect = wrap.getBoundingClientRect()
+      const mouseX = e.clientX - rect.left
+      // 鼠标 x 占容器宽度的比例 -> 对应数据索引（锚点）
+      const anchorIdx = (mouseX / rect.width) * (total - 1)
+      const [s, eIdx] = effectiveRange ?? [0, total]
+      const span = eIdx - s
+      // deltaY > 0 = 放大（缩小窗口），< 0 = 缩小（扩大窗口）
+      const factor = e.deltaY > 0 ? 0.85 : 1 / 0.85
+      let newSpan = Math.round(span * factor)
+      // 最小窗口 8 个点，最大不超过全量
+      newSpan = Math.max(8, Math.min(total, newSpan))
+      if (newSpan === span && newSpan !== 8 && newSpan !== total) return
+      // 以锚点为中心按原比例分配新窗口，再平移使锚点保持在鼠标位置比例
+      const anchorRatio = (anchorIdx - s) / span
+      let newStart = Math.round(anchorIdx - anchorRatio * newSpan)
+      let newEnd = newStart + newSpan
+      // 边界修正
+      if (newStart < 0) { newStart = 0; newEnd = newSpan }
+      if (newEnd > total) { newEnd = total; newStart = Math.max(0, total - newSpan) }
+      if (newEnd - newStart < 8) return
+      setViewRange(newStart === 0 && newEnd === total ? null : [newStart, newEnd])
+    }
+    wrap.addEventListener('wheel', onWheelNative, { passive: false })
+    return () => wrap.removeEventListener('wheel', onWheelNative)
+  }, [total, effectiveRange, chartVisible])
+
+  // ===== 拖拽平移 =====
+  // dragMovedRef: 本次按下是否产生了实际位移（超过阈值），
+  // 用于抑制拖拽松手后浏览器派发的 click 误触发新闻检索
+  const dragMovedRef = useRef(false)
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0) return // 仅左键
+    const wrap = chartWrapRef.current
+    if (!wrap || total < 2) return
+    dragMovedRef.current = false
+    dragStateRef.current = {
+      startX: e.clientX,
+      startRange: effectiveRange ?? [0, total],
+    }
+    setDraggingChart(true)
+  }, [total, effectiveRange])
+
+  useEffect(() => {
+    if (!draggingChart) return
+    const onMove = (ev: MouseEvent) => {
+      const ds = dragStateRef.current
+      const wrap = chartWrapRef.current
+      if (!ds || !wrap || total < 2) return
+      const rect = wrap.getBoundingClientRect()
+      const dx = ev.clientX - ds.startX
+      // 位移超过 5px 视为拖拽（抑制后续 click）
+      if (Math.abs(dx) > 5) dragMovedRef.current = true
+      // dx 像素 -> 索引位移（按当前窗口像素跨度换算）
+      const [s, e] = ds.startRange
+      const span = e - s
+      const idxShift = Math.round((dx / rect.width) * span)
+      if (idxShift === 0) return
+      let newStart = s - idxShift
+      let newEnd = e - idxShift
+      // 边界夹紧
+      if (newStart < 0) { newStart = 0; newEnd = span }
+      if (newEnd > total) { newEnd = total; newStart = total - span }
+      if (newEnd - newStart < 8) return
+      setViewRange(newStart === 0 && newEnd === total ? null : [newStart, newEnd])
+    }
+    const onUp = () => {
+      dragStateRef.current = null
+      setDraggingChart(false)
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+    return () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+  }, [draggingChart, total])
+
+  // 双击重置
+  // clickTimerRef: 单击检索的延迟执行定时器；双击时取消，避免双击重置误触发检索
+  const clickTimerRef = useRef<number | null>(null)
+  const handleDblClick = useCallback(() => {
+    if (clickTimerRef.current) {
+      window.clearTimeout(clickTimerRef.current)
+      clickTimerRef.current = null
+    }
+    setViewRange(null)
+  }, [])
+
+  // 组件卸载时清理挂起的单击定时器
+  useEffect(() => {
+    return () => {
+      if (clickTimerRef.current) window.clearTimeout(clickTimerRef.current)
+    }
+  }, [])
+
+  // 时间轴滑块 -> 精确映射回索引区间（取代 App 层 RangeKey 粗映射）
+  const handleTimelineRange = useCallback((start: string, end: string) => {
+    if (total < 2) return
+    const startTs = new Date(start + 'T00:00:00').getTime()
+    const endTs = new Date(end + 'T00:00:00').getTime()
+    if (!isFinite(startTs) || !isFinite(endTs) || endTs < startTs) return
+    // 在全量数据中找最接近的日期索引
+    const dates = aligned.chartData.map((r) => r.date as string)
+    let sIdx = 0
+    let eIdx = dates.length - 1
+    for (let i = 0; i < dates.length; i++) {
+      const ts = new Date(dates[i] + 'T00:00:00').getTime()
+      if (ts < startTs) sIdx = i
+      if (ts <= endTs) eIdx = i
+    }
+    // 全量时清空缩放
+    if (sIdx <= 0 && eIdx >= dates.length - 1) {
+      setViewRange(null)
+    } else {
+      setViewRange([sIdx, Math.max(sIdx + 8, eIdx + 1)])
+    }
+  }, [total, aligned.chartData])
+
   // 视觉高亮判定:目标子集不全时,非目标基金淡化(自动,无需手动锁定)
   const isTargetSubSet =
     newsTargetCodes != null && newsTargetCodes.length > 0 && newsTargetCodes.length < funds.length
@@ -229,27 +410,39 @@ export function NavChartPanel({
 
   // 点击图表:优先从 activePayload 获取点击的基金 dataKey,否则 fallback 到 funds[0]
   // 点空白（无 activeLabel）时触发 onChartBlankClick（抽屉打开时关闭抽屉）
-  // 修饰键: Shift = 仅检索该点对应基金, Alt = 锁定到该基金后再检索
+  // 交互冲突处理:
+  //   1. 拖拽平移松手后的 click 不触发检索（dragMovedRef 抑制）
+  //   2. 单击检索延迟 280ms 执行，双击重置时取消（避免双击误触发两次检索）
   const handleClick = (state: ClickEventState, e?: React.MouseEvent) => {
-    if (!state || !state.activeLabel) {
-      // 点空白：若提供了 onChartBlankClick 则触发
-      if (onChartBlankClick) onChartBlankClick()
+    // 拖拽产生的 click：吞掉
+    if (dragMovedRef.current) {
+      dragMovedRef.current = false
       return
     }
-    const date = state.activeLabel as string
-    let fundCode = ''
-    // 从 activePayload 找到点击的数据系列(dataKey 即基金 code)，跳过基准虚线(_bench)
-    if (state.activePayload && state.activePayload.length > 0) {
-      const p = state.activePayload.find((x) => !String(x.dataKey).endsWith('_bench'))
-      if (p) fundCode = p.dataKey as string
-    }
-    // fallback:无法确定时用 funds[0]
-    if (!fundCode || !funds.some((f) => f.code === fundCode)) {
-      fundCode = funds[0]?.code || ''
-    }
-    if (!fundCode) return
-    // 单源决策由 App.tsx 内的 newsTargetCodes 完成;此处仅透传点击事件
-    onPointClick(date, fundCode)
+    // 取消上一次待执行的单击（快速连点只执行最后一次）
+    if (clickTimerRef.current) window.clearTimeout(clickTimerRef.current)
+    clickTimerRef.current = window.setTimeout(() => {
+      clickTimerRef.current = null
+      if (!state || !state.activeLabel) {
+        // 点空白：若提供了 onChartBlankClick 则触发
+        if (onChartBlankClick) onChartBlankClick()
+        return
+      }
+      const date = state.activeLabel as string
+      let fundCode = ''
+      // 从 activePayload 找到点击的数据系列(dataKey 即基金 code)，跳过基准虚线(_bench)
+      if (state.activePayload && state.activePayload.length > 0) {
+        const p = state.activePayload.find((x) => !String(x.dataKey).endsWith('_bench'))
+        if (p) fundCode = p.dataKey as string
+      }
+      // fallback:无法确定时用 funds[0]
+      if (!fundCode || !funds.some((f) => f.code === fundCode)) {
+        fundCode = funds[0]?.code || ''
+      }
+      if (!fundCode) return
+      // 单源决策由 App.tsx 内的 newsTargetCodes 完成;此处仅透传点击事件
+      onPointClick(date, fundCode)
+    }, 280)
   }
 
   return (
@@ -264,16 +457,49 @@ export function NavChartPanel({
             {chartMode === 'return'
               ? '累计收益率（蛋卷口径·随区间重定基）· 虚线=业绩比较基准'
               : '绝对净值（元）'}{' '}
-            · 点击曲线任意点位检索新闻
+            · 点击曲线检索新闻 · 滚轮缩放 · 拖拽平移 · 双击重置
           </span>
         </div>
+        {/* 缩放状态指示 + 重置按钮 */}
+        {effectiveRange && (
+          <button
+            onClick={handleDblClick}
+            style={{
+              background: p.accentSoft,
+              color: p.accent,
+              border: `1px solid ${p.accent}44`,
+              borderRadius: '4px',
+              padding: '2px 8px',
+              fontSize: '11px',
+              cursor: 'pointer',
+              fontWeight: 500,
+              lineHeight: 1.4,
+              whiteSpace: 'nowrap',
+            }}
+            title="重置为全量视图"
+          >
+            🔍 {viewDates.start} ~ {viewDates.end} · 双击图表重置
+          </button>
+        )}
       </div>
       <div style={{ height: '2px', background: `linear-gradient(90deg, ${p.accent}, transparent)`, marginBottom: '8px', borderRadius: '1px' }} />
-      <div className={mode === 'dark' ? 'tech-grid-bg-dark' : 'tech-grid-bg'} style={{ flex: 1, minHeight: 0, borderRadius: '8px' }}>
+      <div
+        className={mode === 'dark' ? 'tech-grid-bg-dark' : 'tech-grid-bg'}
+        ref={chartWrapRef}
+        onMouseDown={handleMouseDown}
+        onDoubleClick={handleDblClick}
+        style={{
+          flex: 1,
+          minHeight: 0,
+          borderRadius: '8px',
+          cursor: draggingChart ? 'grabbing' : effectiveRange ? 'grab' : 'default',
+          userSelect: draggingChart ? 'none' : undefined,
+        }}
+      >
         <ErrorBoundary>
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart
-            data={aligned.chartData}
+            data={viewData}
             margin={{ top: 8, right: 16, left: 0, bottom: 0 }}
             onClick={handleClick}
           >
@@ -390,9 +616,11 @@ export function NavChartPanel({
         xStart={aligned.dates[0] || ''}
         xEnd={aligned.dates[aligned.dates.length - 1] || ''}
         xScale={xScaleRef.current ?? undefined}
+        viewStart={viewDates.start}
+        viewEnd={viewDates.end}
         onJumpTo={onJumpToAnchor}
         onRemove={onRemoveAnchor}
-        onRangeChange={onRangeChange}
+        onRangeChange={handleTimelineRange}
         listMode={listMode}
         onToggleListMode={onToggleListMode}
         onClearAllAnchors={onClearAllAnchors}

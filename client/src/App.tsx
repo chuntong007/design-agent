@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
-import type { FundDetail, SectorInfo, NewsSession, GrowthPoint } from './types'
-import { api, searchNewsStream } from './api'
+import type { FundDetail, SectorInfo, NewsSession, ChatMessage, GrowthPoint } from './types'
+import { api, searchNewsStream, chatNewsStream } from './api'
 import { storage, type PinnedFund, type AnchorNews } from './storage'
 import { seriesColor, makeStyles } from './theme'
 import { useTheme } from './ThemeContext'
@@ -252,7 +252,8 @@ export function App() {
             updateSession(sessionId, { outputText: evt.data.text })
             break
           case 'complete':
-            updateSession(sessionId, { outputText: evt.data.text, reasoning: evt.data.reasoning })
+            // complete 携带最终全文；同时清 loading（防御：done 事件丢失时连接中断也不卡 loading）
+            updateSession(sessionId, { outputText: evt.data.text, reasoning: evt.data.reasoning, loading: false, status: null })
             break
           case 'error':
             updateSession(sessionId, { error: evt.data.message })
@@ -306,6 +307,106 @@ export function App() {
   const collapseDrawer = useCallback(() => {
     setDrawerCollapsed(true)
   }, [])
+
+  // 【对话延伸】基于当前激活会话的报告继续追问（SSE 流式）
+  const chatAbortRef = useRef<AbortController | null>(null)
+  // 对话超时兜底：LLM + web_search 生成较慢（长报告上下文 + 联网检索），
+  // 上限 5 分钟；连接被杀（如后端重启）时避免永久"生成中"
+  const CHAT_TIMEOUT_MS = 5 * 60 * 1000
+
+  const sendChat = useCallback(
+    (sessionId: string, question: string) => {
+      const q = question.trim()
+      if (!q) return
+      const session = newsSessions.find((s) => s.id === sessionId)
+      if (!session || !session.outputText || session.loading) return
+      // 已有对话生成中则禁止（同时只允许一个追问进行）
+      if (session.chat?.some((m) => m.loading)) return
+
+      // 1. 追加用户消息 + assistant 占位（loading）
+      const history = (session.chat || []).map((m) => ({ role: m.role, content: m.content }))
+      updateSession(sessionId, (s) => ({
+        chat: [...(s.chat || []), { role: 'user', content: q }, { role: 'assistant', content: '', reasoning: '', loading: true }],
+      }))
+
+      // 2. 取消上一次未完成的对话请求
+      if (chatAbortRef.current) {
+        chatAbortRef.current.abort()
+        chatAbortRef.current = null
+      }
+
+      // 超时兜底定时器：到时仍未完成则标记错误并终止
+      const timeoutTimer = window.setTimeout(() => {
+        updateSession(sessionId, (s) => {
+          const chat = [...(s.chat || [])]
+          const last = chat.length - 1
+          if (last >= 0 && chat[last].role === 'assistant' && chat[last].loading) {
+            chat[last] = { ...chat[last], loading: false, error: '生成超时（3 分钟），请重试' }
+            return { chat }
+          }
+          return {}
+        })
+        if (chatAbortRef.current) {
+          chatAbortRef.current.abort()
+          chatAbortRef.current = null
+        }
+      }, CHAT_TIMEOUT_MS)
+      const clearTimeoutFn = () => window.clearTimeout(timeoutTimer)
+
+      // 3. 流式请求（assistant 占位消息索引 = chat.length + 1，即最后一条）
+      const controller = chatNewsStream(
+        {
+          date: session.date,
+          fundCodes: session.targetFundCodes || [session.fundCode],
+          report: session.outputText,
+          history,
+          question: q,
+        },
+        (evt) => {
+          const patchAssistant = (patch: Partial<ChatMessage> | ((prev: ChatMessage) => Partial<ChatMessage>)) =>
+            updateSession(sessionId, (s) => {
+              const chat = [...(s.chat || [])]
+              const last = chat.length - 1
+              if (last < 0 || chat[last].role !== 'assistant') return {}
+              chat[last] = { ...chat[last], ...(typeof patch === 'function' ? patch(chat[last]) : patch) }
+              return { chat }
+            })
+
+          switch (evt.event) {
+            case 'reasoning_delta':
+              patchAssistant((prev) => ({ reasoning: (prev.reasoning || '') + evt.data.text }))
+              break
+            case 'reasoning_done':
+              patchAssistant({ reasoning: evt.data.text })
+              break
+            case 'output_delta':
+              patchAssistant((prev) => ({ content: prev.content + evt.data.text }))
+              break
+            case 'output_done':
+              patchAssistant({ content: evt.data.text })
+              break
+            case 'complete':
+              clearTimeoutFn()
+              patchAssistant({ content: evt.data.text, reasoning: evt.data.reasoning, loading: false })
+              break
+            case 'sources':
+              updateSession(sessionId, (s) => ({ chatSources: [...(s.chatSources || []), ...evt.data.urls] }))
+              break
+            case 'error':
+              clearTimeoutFn()
+              patchAssistant({ error: evt.data.message, loading: false })
+              break
+            case 'done':
+              clearTimeoutFn()
+              patchAssistant({ loading: false })
+              break
+          }
+        }
+      )
+      chatAbortRef.current = controller
+    },
+    [newsSessions, updateSession]
+  )
 
   // 展开抽屉（恢复之前收起的会话）
   const expandDrawer = useCallback(() => {
@@ -368,21 +469,8 @@ export function App() {
     setHighlightDate((prev) => (prev === date ? null : date))
   }, [])
 
-  // 【NewsTimeline】范围滑块变化 -> 联动到 range
-  // 注意：直接 setRange 会让 Header 的 range 选择器同步更新；用户也可以用 Header 改回
-  const handleTimelineRangeChange = useCallback((start: string, end: string) => {
-    // 把 [start, end] 映射到项目内置的 RangeKey（用 1y/3y/5y/all 都行,这里用 'all' 全量最安全）
-    // 实际应用：更合理的做法是依据天数映射到最接近的预设
-    const days = Math.round((new Date(end).getTime() - new Date(start).getTime()) / 86400000)
-    let key: string = 'all'
-    if (days <= 31) key = '1m'
-    else if (days <= 92) key = '3m'
-    else if (days <= 186) key = '6m'
-    else if (days <= 365) key = '1y'
-    else if (days <= 365 * 3) key = '3y'
-    else if (days <= 365 * 5) key = '5y'
-    setRange(key)
-  }, [])
+  // 【缩放联动】滑块范围变化已内聚在 NavChartPanel（精确日期->索引映射），
+  // App 层不再做 RangeKey 粗映射（旧逻辑映射到 1y/3y 预设导致联动无意义）
 
   const loadedFunds = funds.filter((f) => f.detail)
   const selectedFund = funds.find((f) => f.code === selectedCode) || funds[0]
@@ -429,7 +517,6 @@ export function App() {
                 onChartBlankClick={drawerOpen ? collapseDrawer : undefined}
                 onJumpToAnchor={handleJumpToAnchor}
                 onRemoveAnchor={removeAnchor}
-                onRangeChange={handleTimelineRangeChange}
                 listMode={newsTimelineListMode}
                 onToggleListMode={toggleNewsTimelineListMode}
                 onClearAllAnchors={clearAllAnchors}
@@ -538,6 +625,7 @@ export function App() {
                 anchors={anchors}
                 onHighlightDate={setHighlightDate}
                 availableFunds={loadedFunds.map((f) => ({ code: f.code, name: f.detail?.name || f.name }))}
+                onSendChat={sendChat}
               />
             </div>
           )}

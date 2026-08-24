@@ -427,87 +427,93 @@ export function BacktestPanel({ funds, range, onRangeChange }: Props) {
 
               <Divider label="选择策略" labelPosition="center" />
 
-              {/* 策略卡片列表 */}
-              <Stack gap="xs">
-                {strategies.map((s) => {
-                  const selected = s.key === strategyKey
-                  return (
-                    <Card
-                      key={s.key}
-                      withBorder
-                      radius="md"
-                      p="sm"
-                      onClick={() => setStrategyKey(s.key as BacktestStrategy)}
-                      style={{
-                        cursor: 'pointer',
-                        borderColor: selected ? p.accent : p.border,
-                        background: selected ? p.accentSoft : 'transparent',
-                        transition: 'all 0.2s ease',
-                        boxShadow: selected ? `0 0 0 1px ${p.accent}` : 'none',
-                      }}
-                    >
-                      <Group justify="space-between" wrap="nowrap" mb={4}>
-                        <Text fw={700} size="sm" c={mode === 'dark' ? 'gray.1' : 'dark.8'}>
-                          {s.name}
-                        </Text>
-                        <Group gap={4}>
-                          <Badge color={RISK_COLOR[s.riskLevel]} variant="light" size="xs">
-                            风险{s.riskLevel}
-                          </Badge>
-                          <Badge
-                            color={CATEGORY_COLOR[s.category] || 'gray'}
-                            variant="dot"
-                            size="xs"
-                          >
-                            {s.category}
-                          </Badge>
-                        </Group>
-                      </Group>
-                      <Text size="xs" c={mode === 'dark' ? 'gray.4' : 'gray.6'} lineClamp={selected ? undefined : 2}>
-                        {s.description}
-                      </Text>
-
-                      {selected && (
-                        <Box mt="xs" style={{ borderTop: `1px solid ${p.border}`, paddingTop: 8 }}>
-                          <Stack gap={6}>
-                            <Box>
-                              <Text size="xs" fw={600} mb={2}>
-                                执行步骤
-                              </Text>
-                              <Stack gap={2}>
-                                {s.details.map((d, i) => (
-                                  <Group key={i} gap={6} align="flex-start">
-                                    <ThemeIcon size={16} radius="xl" variant="light" color="blue">
-                                      <Text size="9px" fw={700}>
-                                        {i + 1}
-                                      </Text>
-                                    </ThemeIcon>
-                                    <Text size="xs" c={mode === 'dark' ? 'gray.3' : 'gray.7'}>
-                                      {d}
-                                    </Text>
-                                  </Group>
-                                ))}
-                              </Stack>
-                            </Box>
-                            <Divider my={4} />
-                            <Group gap={6} align="flex-start">
-                              <Target size={14} color={p.text2} />
-                              <Box>
-                                <Text size="xs" fw={600}>
-                                  适合市场
-                                </Text>
-                                <Text size="xs" c={mode === 'dark' ? 'gray.3' : 'gray.7'}>
-                                  {s.suitableMarket}
-                                </Text>
-                              </Box>
-                            </Group>
-                          </Stack>
-                        </Box>
-                      )}
-                    </Card>
-                  )
-                })}
+              {/* 策略选择：可搜索下拉（解决策略过多需长滚动的问题） */}
+              <Stack gap={6}>
+                <Text size="xs" c={mode === 'dark' ? 'gray.4' : 'gray.6'} fw={500}>
+                  策略（输入名称/分类/风险搜索）
+                </Text>
+                <Select
+                  value={strategyKey}
+                  onChange={(v) => v && setStrategyKey(v as BacktestStrategy)}
+                  data={strategies.map((s) => ({
+                    value: s.key,
+                    label: `${s.name} · ${s.category} · 风险${s.riskLevel}`,
+                  }))}
+                  radius="md"
+                  searchable
+                  nothingFoundMessage="未找到匹配策略"
+                  maxDropdownHeight={280}
+                />
               </Stack>
+
+              {/* 选中策略的详情卡片（单卡片，含执行步骤/适合市场） */}
+              {selectedStrategy && (
+                <Card
+                  withBorder
+                  radius="md"
+                  p="sm"
+                  style={{
+                    borderColor: p.accent,
+                    background: p.accentSoft,
+                  }}
+                >
+                  <Group justify="space-between" wrap="nowrap" mb={4}>
+                    <Text fw={700} size="sm" c={mode === 'dark' ? 'gray.1' : 'dark.8'}>
+                      {selectedStrategy.name}
+                    </Text>
+                    <Group gap={4}>
+                      <Badge color={RISK_COLOR[selectedStrategy.riskLevel]} variant="light" size="xs">
+                        风险{selectedStrategy.riskLevel}
+                      </Badge>
+                      <Badge
+                        color={CATEGORY_COLOR[selectedStrategy.category] || 'gray'}
+                        variant="dot"
+                        size="xs"
+                      >
+                        {selectedStrategy.category}
+                      </Badge>
+                    </Group>
+                  </Group>
+                  <Text size="xs" c={mode === 'dark' ? 'gray.4' : 'gray.6'}>
+                    {selectedStrategy.description}
+                  </Text>
+                  <Box mt="xs" style={{ borderTop: `1px solid ${p.border}`, paddingTop: 8 }}>
+                    <Stack gap={6}>
+                      <Box>
+                        <Text size="xs" fw={600} mb={2}>
+                          执行步骤
+                        </Text>
+                        <Stack gap={2}>
+                          {selectedStrategy.details.map((d, i) => (
+                            <Group key={i} gap={6} align="flex-start">
+                              <ThemeIcon size={16} radius="xl" variant="light" color="blue">
+                                <Text size="9px" fw={700}>
+                                  {i + 1}
+                                </Text>
+                              </ThemeIcon>
+                              <Text size="xs" c={mode === 'dark' ? 'gray.3' : 'gray.7'}>
+                                {d}
+                              </Text>
+                            </Group>
+                          ))}
+                        </Stack>
+                      </Box>
+                      <Divider my={4} />
+                      <Group gap={6} align="flex-start">
+                        <Target size={14} color={p.text2} />
+                        <Box>
+                          <Text size="xs" fw={600}>
+                            适合市场
+                          </Text>
+                          <Text size="xs" c={mode === 'dark' ? 'gray.3' : 'gray.7'}>
+                            {selectedStrategy.suitableMarket}
+                          </Text>
+                        </Box>
+                      </Group>
+                    </Stack>
+                  </Box>
+                </Card>
+              )}
 
               {/* 动态策略参数 */}
               {selectedStrategy && selectedStrategy.params.length > 0 && (
@@ -583,6 +589,7 @@ export function BacktestPanel({ funds, range, onRangeChange }: Props) {
                   <ExcessReturnBadge
                     value={result.metrics.totalReturn - result.metrics.benchmarkReturn}
                     palette={p}
+                    hint={METRIC_HINTS.excessReturn}
                   />
                 </Group>
                 <Group gap="lg" align="center" wrap="nowrap">
@@ -597,14 +604,16 @@ export function BacktestPanel({ funds, range, onRangeChange }: Props) {
                       },
                     ]}
                     label={
-                      <Stack align="center" gap={0}>
-                        <Text size="xs" c={mode === 'dark' ? 'gray.4' : 'gray.6'}>
-                          夏普比率
-                        </Text>
-                        <Text size="md" fw={800} c={mode === 'dark' ? 'gray.0' : 'dark.9'}>
-                          {result.metrics.sharpe.toFixed(2)}
-                        </Text>
-                      </Stack>
+                      <Tooltip label={METRIC_HINTS.sharpe} withArrow multiline w={280} position="right" styles={{ tooltip: { whiteSpace: 'pre-line', fontSize: '11px', lineHeight: 1.6 } }}>
+                        <Stack align="center" gap={0}>
+                          <Text size="xs" c={mode === 'dark' ? 'gray.4' : 'gray.6'}>
+                            夏普比率 ⓘ
+                          </Text>
+                          <Text size="md" fw={800} c={mode === 'dark' ? 'gray.0' : 'dark.9'}>
+                            {result.metrics.sharpe.toFixed(2)}
+                          </Text>
+                        </Stack>
+                      </Tooltip>
                     }
                   />
                   <Stack gap={4} style={{ flex: 1 }}>
@@ -657,6 +666,7 @@ export function BacktestPanel({ funds, range, onRangeChange }: Props) {
                     label="总收益率"
                     value={fmtPct(result.metrics.totalReturn)}
                     color={result.metrics.totalReturn >= 0 ? p.up : p.down}
+                    hint={METRIC_HINTS.totalReturn}
                     icon={
                       result.metrics.totalReturn >= 0 ? (
                         <TrendingUp size={14} />
@@ -669,31 +679,37 @@ export function BacktestPanel({ funds, range, onRangeChange }: Props) {
                     label="年化收益"
                     value={fmtPct(result.metrics.annualReturn)}
                     color={result.metrics.annualReturn >= 0 ? p.up : p.down}
+                    hint={METRIC_HINTS.annualReturn}
                   />
                   <MetricCell
                     label="基准收益"
                     value={fmtPct(result.metrics.benchmarkReturn)}
                     color={result.metrics.benchmarkReturn >= 0 ? p.up : p.down}
+                    hint={METRIC_HINTS.benchmarkReturn}
                   />
                   <MetricCell
                     label="期末资产"
                     value={fmtNum(result.metrics.finalValue, 0)}
                     color={p.text0}
+                    hint={METRIC_HINTS.finalValue}
                   />
                   <MetricCell
                     label="交易次数"
                     value={String(result.metrics.tradeCount)}
                     color={p.text0}
+                    hint={METRIC_HINTS.tradeCount}
                   />
                   <MetricCell
                     label="胜率"
                     value={`${result.metrics.winRate.toFixed(0)}%`}
                     color={p.text0}
+                    hint={METRIC_HINTS.winRate}
                   />
                   <MetricCell
                     label="最大回撤"
                     value={fmtPct(result.metrics.maxDrawdown)}
                     color={p.impactNegative}
+                    hint={METRIC_HINTS.maxDrawdown}
                   />
                   <MetricCell
                     label="超额收益"
@@ -703,6 +719,7 @@ export function BacktestPanel({ funds, range, onRangeChange }: Props) {
                         ? p.up
                         : p.down
                     }
+                    hint={METRIC_HINTS.excessReturn}
                   />
                 </div>
 
@@ -948,41 +965,60 @@ function StrategyParamInput({
   )
 }
 
+// ===== 指标含义说明（悬停提示文案）=====
+const METRIC_HINTS = {
+  totalReturn: '策略在回测区间内的总涨跌幅。\n\n计算：(期末资产 - 投入总资金) / 投入总资金 × 100%。\n\n直观理解：期初投入的钱到期末赚/亏了多少比例。注意它不体现过程中的波动，需结合最大回撤一起看。',
+  annualReturn: '把总收益折算成"一年能赚多少"的年化收益率。\n\n计算：(1 + 总收益率)^(365/天数) - 1。\n\n直观理解：不同时间长度的回测放在一起比较时的统一标尺。例如 3 年赚 33%，年化约 10%。参考：长期年化 >8% 已属优秀，>15% 极少。',
+  benchmarkReturn: '同期"期初全仓买入并一直持有"的收益（买入持有基准）。\n\n作用：判断策略是否"跑赢躺平"。若策略收益低于基准，说明主动操作反而拖了后腿（但可能降低了波动，需结合夏普看）。',
+  finalValue: '回测结束时的账户总资产（元）。\n\n计算：投入总资金 + 累计盈亏。对比初始资金即可直观看到赚/亏金额。',
+  tradeCount: '策略在区间内执行的买卖总次数（买入+卖出各计一次）。\n\n注意：交易越频繁，实际手续费/冲击成本越高（本回测未计佣金）。次数极少说明策略基本没动，次数过多则要警惕过度交易。',
+  winRate: '盈利离场的交易占已完结交易的比例。\n\n计算：盈利笔数 / 总交易笔数 × 100%。\n\n误区提醒：高胜率 ≠ 赚钱。若每次赚 1% 就跑、亏 20% 才割，胜率 90% 仍可能巨亏。需结合单笔盈亏比一起判断。',
+  maxDrawdown: '从历史最高点跌到最低点的最大跌幅，衡量"最惨时刻"的亏损深度。\n\n计算：区间内 (峰值 - 之后最低值) / 峰值 的最大值。\n\n直观理解：你在最高点买入的话最多会浮亏多少。注意：回撤 20% 需要再涨 25% 才能回本，回撤 50% 需要涨 100%。风险承受力弱的投资者应重点关注此项。',
+  excessReturn: '策略收益超出买入持有基准的部分。\n\n计算：策略总收益 - 基准收益。\n\n为正说明主动管理创造了超额收益（alpha）；为负说明不如直接持有。这是衡量策略价值的最核心指标。',
+  sharpe: '每承担 1 单位风险（波动）换取了多少超额收益，"性价比"指标。\n\n计算：(策略收益 - 无风险利率) / 策略收益率的标准差。\n\n参考：>2 优秀，1~2 良好，0~1 一般，<0 亏损且波动大。夏普相同的情况下，回撤更小的策略持有体验更好。',
+} as const
+
 // ===== 单格指标 =====
 function MetricCell({
   label,
   value,
   color,
   icon,
+  hint,
 }: {
   label: string
   value: string
   color: string
   icon?: React.ReactNode
+  hint?: string
 }) {
   const { mode } = useTheme()
   return (
-    <Paper
-      radius="md"
-      p="xs"
-      withBorder
-      style={{
-        background: mode === 'dark' ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.015)',
-        borderColor: mode === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)',
-      }}
-    >
-      <Stack gap={2}>
-        <Group gap={4} align="center">
-          {icon}
-          <Text size="xs" c={mode === 'dark' ? 'gray.5' : 'gray.5'}>
-            {label}
+    <Tooltip label={hint} withArrow multiline w={280} position="top" styles={{ tooltip: { whiteSpace: 'pre-line', fontSize: '11px', lineHeight: 1.6 } }} disabled={!hint}>
+      <Paper
+        radius="md"
+        p="xs"
+        withBorder
+        style={{
+          background: mode === 'dark' ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.015)',
+          borderColor: mode === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)',
+          cursor: hint ? 'help' : 'default',
+        }}
+      >
+        <Stack gap={2}>
+          <Group gap={4} align="center">
+            {icon}
+            <Text size="xs" c={mode === 'dark' ? 'gray.5' : 'gray.5'}>
+              {label}
+              {hint && <span style={{ opacity: 0.55, marginLeft: 3, fontSize: 10 }}>ⓘ</span>}
+            </Text>
+          </Group>
+          <Text size="md" fw={800} style={{ color, fontFamily: '"JetBrains Mono", monospace' }}>
+            {value}
           </Text>
-        </Group>
-        <Text size="md" fw={800} style={{ color, fontFamily: '"JetBrains Mono", monospace' }}>
-          {value}
-        </Text>
-      </Stack>
-    </Paper>
+        </Stack>
+      </Paper>
+    </Tooltip>
   )
 }
 
@@ -990,21 +1026,25 @@ function MetricCell({
 function ExcessReturnBadge({
   value,
   palette,
+  hint,
 }: {
   value: number
   palette: ReturnType<typeof useTheme>['palette']
+  hint?: string
 }) {
   const positive = value >= 0
   return (
-    <Paper
-      radius="md"
-      p="sm"
-      withBorder
-      style={{
-        background: positive ? `${palette.up}15` : `${palette.down}15`,
-        borderColor: positive ? `${palette.up}50` : `${palette.down}50`,
-      }}
-    >
+    <Tooltip label={hint} withArrow multiline w={280} position="bottom" styles={{ tooltip: { whiteSpace: 'pre-line', fontSize: '11px', lineHeight: 1.6 } }} disabled={!hint}>
+      <Paper
+        radius="md"
+        p="sm"
+        withBorder
+        style={{
+          background: positive ? `${palette.up}15` : `${palette.down}15`,
+          borderColor: positive ? `${palette.up}50` : `${palette.down}50`,
+          cursor: 'help',
+        }}
+      >
       <Stack gap={0} align="center">
         <Text size="xs" c={positive ? palette.up : palette.down} fw={500}>
           超额收益
@@ -1020,6 +1060,7 @@ function ExcessReturnBadge({
           {fmtPct(value)}
         </Text>
       </Stack>
-    </Paper>
+      </Paper>
+    </Tooltip>
   )
 }

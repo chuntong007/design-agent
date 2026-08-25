@@ -1,6 +1,12 @@
 # 基金多维度数据分析看板
 
-全栈基金分析看板，支持多基金净值对比、重仓股参照、**点击净值曲线触发 AI 联网分析**（真 token 流式 + 抽屉对照模式）、分析报告锚定跨期对照、10 种策略回测。
+一个把「行情数据」变成「智能分析入口」的基金研究工作台——**净值曲线即交互地图**：
+
+- 🖱️ **图上即所得**：走势图支持滚轮缩放、拖拽平移定位任意时间窗口，点击曲线任意点位，AI 即刻联网检索当日财经新闻，流式输出归因报告（含思考过程与来源），并可**基于报告继续多轮追问**深入挖掘；
+- 📌 **分析可沉淀**：报告一键锚定到时间轴，形成跨期对照，历史分析层层叠加；
+- 📊 **决策可验证**：内置 10 种策略回测引擎，指标带释义，量化评估每笔交易决策。
+
+三层能力（看图 → 问 AI → 验策略）闭环于一个界面，让"为什么涨跌、要不要操作"有据可依。
 
 ![主界面](docs/images/dashboard-main.png)
 
@@ -36,7 +42,7 @@ npm run dev
 | `LLM_BASE_URL` | `http://127.0.0.1:15721` | CC-Switch 地址（需启用 codex 端点 `/v1/responses`） |
 | `LLM_MODEL` | 空（不指定） | **业务系统不指定模型**，模型一律由 CC-Switch 默认配置决定；仅在需显式覆盖时可设置 |
 | `LLM_API_KEY` | 空 | 直连上游时填写；CC-Switch codex 模式无需 |
-| `LLM_TIMEOUT` | `60000` | 请求超时（ms） |
+| `LLM_TIMEOUT` | `300000` | 请求超时（ms）；含 web_search 的长报告/对话生成较慢，默认 5 分钟 |
 
 > **CC-Switch 要求**：本系统使用 OpenAI Responses API（`/v1/responses`，内置 `web_search` 工具），这是 codex 使用的统一接口。请在 CC-Switch 中按 **codex 配置**添加 provider（启用 codex 端点并指向对应上游模型），后端仅需将 `LLM_BASE_URL` 指向该端点。若 CC-Switch 仅配置了 chat 补全（`/v1/chat/completions`）端点，将无法响应本系统的请求。
 >
@@ -74,6 +80,16 @@ npm run dev
 - **多基金对比**：净值曲线叠加，图例区分颜色
 - **核心指标**：区间总收益、年初至今、最大回撤、年化波动率、夏普比率，横向对比并高亮最优值 ★
 
+#### 图表缩放与平移
+
+净值走势图支持**滚轮缩放 / 拖拽平移 / 双击重置**，与底部时间轴滑块**双向精确联动**：
+
+- **滚轮缩放**：以鼠标所在位置为锚点缩放时间区间（上滚放大细节、下滚缩小回看）
+- **拖拽平移**：按住曲线左右拖动平移时间窗口，边界自动夹紧
+- **双击重置**：任意位置双击恢复全量视图
+- **双向联动**：图表缩放时底部时间轴滑块手柄精确跟随；拖动滑块时图表区间精确跟随（非粗粒度预设映射），便于锚点报告与净值走势的对照定位
+- 切换区间 / 视图 / 增删基金后缩放状态自动重置，不残留过期区间
+
 #### 检索组合（多基金目标子集）
 
 左栏「📊 已添加基金」下方提供检索组合编辑器，将已添加基金进一步划分为"本次检索的目标子集"：
@@ -109,6 +125,16 @@ npm run dev
 1. **思考过程**：折叠区逐字涌现 AI 的推理内容（reasoning token 实时透传，可展开/收起）
 2. **联网搜索**：实时显示命中的新闻来源 URL
 3. **分析报告**：Markdown 逐字渲染 —— 市场概述 → 重要新闻（含影响判断与原因）→ 综合总结
+
+#### 深入追问（基于报告的多轮对话）
+
+报告生成完成后，抽屉内底部出现 **💬 深入追问** 输入区，可在分析结果基础上继续与大模型对话：
+
+- **多轮上下文**：追问时携带原报告 + 全部历史对话，上下文连贯（如"这条政策后续会如何影响？""中秋旺季数据不及预期对 161725 影响多大？"）
+- **联网补充检索**：涉及报告之外的新信息时，LLM 主动调用 web_search 检索最新动态后回答，新增来源单独列出
+- **流式输出**：追问回答同样真 token 流式渲染（含思考过程折叠区），Enter 发送 / Shift+Enter 换行
+- **超时兜底**：生成超 5 分钟自动标记失败可重试；连接中断不卡死
+- **会话隔离**：每个检索会话独立维护追问历史，切换会话标签不串扰
 
 ![抽屉展开（已锚定）](docs/images/drawer-anchored.png) *(新版：含🔍检索组合徽章+×N 同步检索中徽章)*
 
@@ -177,9 +203,13 @@ npm run dev
 
 > 定投(DCA)、均线交叉、动量轮动、止损止盈、网格交易、双动量、均值回归、趋势跟踪、Kelly 公式仓位、RSI 超买超卖（按风险等级/分类 Badge 着色）
 
+**策略选择**：策略较多时采用**可搜索下拉**（输入名称/分类/风险关键词过滤），选中后下方展示**单卡片详情**（描述 + 执行步骤 + 适合市场），参数区随策略动态渲染，避免长列表滚动。
+
 ![回测配置](docs/images/backtest-config.png)
 
 回测结果展示策略与基准（期初全仓买入持有）的净值对比曲线、交易记录明细及指标（总收益率、年化收益、最大回撤、夏普比率、胜率、交易次数、基准收益、超额收益）。
+
+**指标理解**：关键指标卡片（8 项 + 夏普比率 + 超额收益徽章）**悬停显示 ⓘ 释义**（含义 / 计算方式 / 参考标准 / 常见误区），帮助理解每项指标的业务含义——如"最大回撤：从历史最高点跌到最低点的最大跌幅，回撤 20% 需再涨 25% 才能回本"。
 
 ![回测结果](docs/images/backtest-result.png)
 
@@ -198,7 +228,7 @@ npm run dev
 | 再次点击同一锚点 | `onClick` | 取消图表高亮 |
 | 右键圆点 / 气泡 | `onContextMenu` | 触发 `onRemove(anchorId)` 直接删除 |
 | 键盘 Tab + Enter | `onKeyDown` | 同单击（无障碍） |
-| 拖动范围滑块 | `onMouseDown` handle | 触发 `onRangeChange(start, end)` 调整 X 轴 |
+| 拖动范围滑块 | `onMouseDown` handle | 触发 `onRangeChange(start, end)` 调整 X 轴（受控模式，与图表滚轮缩放双向精确联动） |
 | 双击空白 | `onDoubleClick` | 重置范围到全部 |
 | 列表模式切换 | `onClick` 📋/📊 | 列表 ↔ 时间轴，持久化到 localStorage |
 | 全部清空 | `onClick` 🗑 | 弹出 Mantine Modal 二次确认 |
@@ -273,13 +303,13 @@ claude-design/
         └── components/
             ├── Header.tsx         # 顶栏（搜索/区间/视图/主 Tab）
             ├── FundList.tsx       # 基金列表
-            ├── NavChartPanel.tsx  # 净值曲线（点击检索/锚点/联动高亮）
+            ├── NavChartPanel.tsx  # 净值曲线（点击检索/滚轮缩放/拖拽平移/锚点/联动高亮）
             ├── MetricsPanel.tsx   # 指标横向对比
             ├── HoldingsPanel.tsx  # 重仓股（饼图/行情/走势）
-            ├── NewsDrawer.tsx     # AI 分析抽屉（流式报告 + 多会话 + 日期联动）
+            ├── NewsDrawer.tsx     # AI 分析抽屉（流式报告 + 多会话 + 深入追问 + 日期联动）
             ├── NewsTimeline.tsx   # 锚定报告时间轴（N 层布局 + 精准高亮 + 列表模式）
             ├── ErrorBoundary.tsx  # 图表渲染错误兜底
-            └── BacktestPanel.tsx  # 策略回测
+            └── BacktestPanel.tsx  # 策略回测（策略下拉 + 指标悬停释义）
 ```
 
 ## 数据源说明
@@ -292,6 +322,7 @@ claude-design/
 | 个股行情 | 腾讯 qt.gtimg.cn | GBK 编码，A 股+港股 |
 | 个股 K 线 | 腾讯 web.ifzq.gtimg.cn | 前复权日线 |
 | AI 新闻分析 | LLM Responses API + web_search（codex 协议） | 真 token 流式 + reasoning；模型由 CC-Switch 默认配置决定，业务系统不指定；经 CC-Switch codex 配置本地转发，不走代理 |
+| 对话延伸 | LLM Responses API + web_search（codex 协议） | 基于报告的多轮追问，可联网补充检索；同样经 CC-Switch codex 配置 |
 | 新闻降级 | GDELT / Wikipedia / 新浪 | GDELT/Wikipedia 走 socks5h 代理；GDELT 限流严格，三级降级 |
 
 ## 已知限制
@@ -304,21 +335,37 @@ claude-design/
 
 ## 开发备忘
 
-### 本轮 NewsTimeline 增强要点
+### 本轮功能迭代要点
 
-- **N 层布局**：`placeBubbles` 从硬编码 2 层升级为多层贪心，canvas 高度自适应
-- **精准高亮**：用 `hoveredPlacementIdx` 索引而非 `fundCode` 关联，消除"误高亮"误解
-- **气泡可交互**：移除 `pointerEvents: none`，气泡与圆点行为完全一致
-- **刻度自适应**：`stepMonths` 候选扩到 `[1,2,3,6,12,24,60]`，覆盖 30 天 ~ 50 年
-- **列表模式**：双模式可触达 + 50+ 提示 banner + 极简文本 4 字截断
-- **全部清空**：双模式 Mantine Modal 二次确认
-- **状态分离**：`App.tsx` 持 `highlightDate` + 列表模式/清空 state，`NewsTimeline` 持 hover/transient state
+**图表缩放与平移（NavChartPanel）**
+- **滚轮缩放**：原生 `addEventListener('wheel', { passive: false })` 实现（React onWheel 为 passive，无法 preventDefault）
+- **高频事件状态同步**：wheel/mousemove 事件频率高于 React 渲染频率，通过 `viewRangeRef`/`totalRef` 镜像最新 state，effect 只绑一次（依赖 `chartVisible`），避免 effect 重绑间隙的 stale closure 抖动
+- **缩放锚点**：鼠标位置映射到当前可视窗口 `[s, e]` 内（而非全量数据），缩放时鼠标指向的日期保持不动
+- **与时间轴滑块双向联动**：图表缩放 → 滑块手柄精确跟随；拖动滑块 → 图表精确跟随（受控模式）
+- **受控滑块防反馈循环**：受控模式下 `onRangeChange` 仅在用户拖拽结束或双击时触发，受控值被动变化绝不触发（避免索引舍入导致的无限制重渲染循环 `Maximum update depth exceeded`）
+- **缩放时禁用 Recharts 重播动画**（`isAnimationActive={!effectiveRange}`），避免 600ms 补间互相打断造成视觉抖动
+
+**新闻分析对话延伸（NewsDrawer + App）**
+- **深入追问**：报告生成后底部出现对话输入区，携带原报告 + 多轮历史构建 prompt
+- **联网补充检索**：追问可再次触发 web_search，新增来源单独列出
+- **超时兜底**：前端 5 分钟超时标记失败可重试，`complete` 事件同时清 loading（防 done 事件丢失卡死）
+
+**策略回测（BacktestPanel）**
+- **策略下拉搜索**：`Select searchable` 替代长卡片列表，选中后单卡片展示详情
+- **指标悬停释义**：8 项关键指标 + 夏普 + 超额收益徽章配 `METRIC_HINTS` 悬停 Tooltip（含义/算法/参考标准/误区）
 
 ### 关键文件
 
-- `client/src/components/NewsTimeline.tsx` （新增）— 主战场
-- `client/src/components/NavChartPanel.tsx` — 5 个新 props 透传 + Modal 集成
-- `client/src/App.tsx` — toggle `highlightDate` + 列表模式/清空 state/callback
+- `client/src/components/NewsTimeline.tsx` — 锚定时间轴 + 受控滑块双向联动
+- `client/src/components/NavChartPanel.tsx` — 净值曲线（缩放/平移/点击检索/锚点）
+- `client/src/components/NewsDrawer.tsx` — AI 分析抽屉（流式报告 + 深入追问）
+- `client/src/components/BacktestPanel.tsx` — 策略回测（下拉 + 指标释义）
+- `client/src/App.tsx` — 会话/追问状态 + 锚定高亮 + 主布局
+- `server/src/routes/news.ts` — SSE 流式接口 + 对话延伸路由（`POST /news/chat/stream`）
+- `server/src/services/news-llm.ts` — 报告 prompt + 对话 prompt 构建
+- `server/src/services/llm.ts` — LLM 客户端（Responses API 流式 + reasoning）
+- `server/src/index.ts` — CORS 显式允许 POST + JSON 头（POST SSE 预检）
+- `server/src/config.ts` — LLM 超时默认 300s（长报告/对话生成较慢）
 - `client/src/storage.ts` — `getNewsTimelineListMode` / `setNewsTimelineListMode` 持久化
 
 ### 已知约束

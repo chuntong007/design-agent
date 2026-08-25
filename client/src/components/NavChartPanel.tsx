@@ -133,7 +133,7 @@ export function NavChartPanel({
 
   // 数据变化（切换 range/模式/基金）时重置缩放，避免残留过期索引
   useEffect(() => {
-    setViewRange(null)
+    setViewRangeSync(null)
   }, [range, chartMode, funds.map((f) => f.code).join(',')])
 
   // 蛋卷 growth day 参数随区间切换（年初至今 -> ty）
@@ -253,38 +253,45 @@ export function NavChartPanel({
     chartMode === 'return' &&
     funds.some((f) => f.detail && !growthMap[`${f.code}:${day}`] && !growthErrors[`${f.code}:${day}`])
   const chartVisible = funds.length > 0 && total > 0 && !growthPendingNow
+  // ref 同步：高频事件处理器统一读 ref，杜绝 effect 重绑间隙的 stale closure 抖动
+  totalRef.current = total
 
   useEffect(() => {
     const wrap = chartWrapRef.current
     if (!wrap) return
     const onWheelNative = (e: WheelEvent) => {
-      if (total < 2) return
+      const n = totalRef.current
+      if (n < 2) return
       e.preventDefault()
       const rect = wrap.getBoundingClientRect()
+      if (rect.width <= 0) return
       const mouseX = e.clientX - rect.left
-      // 鼠标 x 占容器宽度的比例 -> 对应数据索引（锚点）
-      const anchorIdx = (mouseX / rect.width) * (total - 1)
-      const [s, eIdx] = effectiveRange ?? [0, total]
+      // 当前窗口（ref 实时读取）
+      const [s, eIdx] = viewRangeRef.current ?? [0, n]
       const span = eIdx - s
+      if (span < 8 && e.deltaY > 0) return // 已到最小窗口，不再放大
+      // 鼠标 x 比例 -> 当前可视窗口内的数据索引（锚点）
+      // 关键：映射到 [s, eIdx] 而非全量，鼠标指向的日期在缩放前后保持不动
+      const anchorIdx = s + (mouseX / rect.width) * span
       // deltaY > 0 = 放大（缩小窗口），< 0 = 缩小（扩大窗口）
       const factor = e.deltaY > 0 ? 0.85 : 1 / 0.85
-      let newSpan = Math.round(span * factor)
-      // 最小窗口 8 个点，最大不超过全量
-      newSpan = Math.max(8, Math.min(total, newSpan))
-      if (newSpan === span && newSpan !== 8 && newSpan !== total) return
-      // 以锚点为中心按原比例分配新窗口，再平移使锚点保持在鼠标位置比例
+      const newSpan = Math.max(8, Math.min(n, Math.round(span * factor)))
+      if (newSpan === span) return
+      // 锚点在窗口内的比例保持不变 -> 新窗口位置
       const anchorRatio = (anchorIdx - s) / span
       let newStart = Math.round(anchorIdx - anchorRatio * newSpan)
       let newEnd = newStart + newSpan
       // 边界修正
       if (newStart < 0) { newStart = 0; newEnd = newSpan }
-      if (newEnd > total) { newEnd = total; newStart = Math.max(0, total - newSpan) }
+      if (newEnd > n) { newEnd = n; newStart = Math.max(0, n - newSpan) }
       if (newEnd - newStart < 8) return
-      setViewRange(newStart === 0 && newEnd === total ? null : [newStart, newEnd])
+      setViewRangeSync(newStart === 0 && newEnd === n ? null : [newStart, newEnd])
     }
     wrap.addEventListener('wheel', onWheelNative, { passive: false })
     return () => wrap.removeEventListener('wheel', onWheelNative)
-  }, [total, effectiveRange, chartVisible])
+    // 仅依赖 chartVisible 控制挂载时机；状态全部经 ref 读取，避免重绑抖动
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chartVisible])
 
   // ===== 拖拽平移 =====
   // dragMovedRef: 本次按下是否产生了实际位移（超过阈值），
@@ -292,23 +299,25 @@ export function NavChartPanel({
   const dragMovedRef = useRef(false)
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return // 仅左键
-    const wrap = chartWrapRef.current
-    if (!wrap || total < 2) return
+    if (totalRef.current < 2) return
     dragMovedRef.current = false
     dragStateRef.current = {
       startX: e.clientX,
-      startRange: effectiveRange ?? [0, total],
+      startRange: viewRangeRef.current ?? [0, totalRef.current],
     }
     setDraggingChart(true)
-  }, [total, effectiveRange])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     if (!draggingChart) return
     const onMove = (ev: MouseEvent) => {
       const ds = dragStateRef.current
       const wrap = chartWrapRef.current
-      if (!ds || !wrap || total < 2) return
+      const n = totalRef.current
+      if (!ds || !wrap || n < 2) return
       const rect = wrap.getBoundingClientRect()
+      if (rect.width <= 0) return
       const dx = ev.clientX - ds.startX
       // 位移超过 5px 视为拖拽（抑制后续 click）
       if (Math.abs(dx) > 5) dragMovedRef.current = true
@@ -321,9 +330,9 @@ export function NavChartPanel({
       let newEnd = e - idxShift
       // 边界夹紧
       if (newStart < 0) { newStart = 0; newEnd = span }
-      if (newEnd > total) { newEnd = total; newStart = total - span }
+      if (newEnd > n) { newEnd = n; newStart = n - span }
       if (newEnd - newStart < 8) return
-      setViewRange(newStart === 0 && newEnd === total ? null : [newStart, newEnd])
+      setViewRangeSync(newStart === 0 && newEnd === n ? null : [newStart, newEnd])
     }
     const onUp = () => {
       dragStateRef.current = null
@@ -335,7 +344,8 @@ export function NavChartPanel({
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
     }
-  }, [draggingChart, total])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draggingChart])
 
   // 双击重置
   // clickTimerRef: 单击检索的延迟执行定时器；双击时取消，避免双击重置误触发检索
@@ -345,7 +355,8 @@ export function NavChartPanel({
       window.clearTimeout(clickTimerRef.current)
       clickTimerRef.current = null
     }
-    setViewRange(null)
+    setViewRangeSync(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // 组件卸载时清理挂起的单击定时器
@@ -357,7 +368,8 @@ export function NavChartPanel({
 
   // 时间轴滑块 -> 精确映射回索引区间（取代 App 层 RangeKey 粗映射）
   const handleTimelineRange = useCallback((start: string, end: string) => {
-    if (total < 2) return
+    const n = totalRef.current
+    if (n < 2) return
     const startTs = new Date(start + 'T00:00:00').getTime()
     const endTs = new Date(end + 'T00:00:00').getTime()
     if (!isFinite(startTs) || !isFinite(endTs) || endTs < startTs) return
@@ -372,11 +384,12 @@ export function NavChartPanel({
     }
     // 全量时清空缩放
     if (sIdx <= 0 && eIdx >= dates.length - 1) {
-      setViewRange(null)
+      setViewRangeSync(null)
     } else {
-      setViewRange([sIdx, Math.max(sIdx + 8, eIdx + 1)])
+      setViewRangeSync([sIdx, Math.max(sIdx + 8, eIdx + 1)])
     }
-  }, [total, aligned.chartData])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aligned.chartData])
 
   // 视觉高亮判定:目标子集不全时,非目标基金淡化(自动,无需手动锁定)
   const isTargetSubSet =
@@ -573,7 +586,8 @@ export function NavChartPanel({
                       stroke: p.bg0,
                       strokeWidth: 2,
                     }}
-                    isAnimationActive
+                    // 缩放/平移时禁用重播动画：600ms 补间互相打断是视觉抖动来源之一
+                    isAnimationActive={!effectiveRange}
                     animationDuration={600}
                     animationEasing="ease-out"
                     connectNulls
@@ -598,7 +612,8 @@ export function NavChartPanel({
                       dot={false}
                       activeDot={false}
                       legendType="none"
-                      isAnimationActive
+                      // 缩放/平移时禁用重播动画（同 Area）
+                      isAnimationActive={!effectiveRange}
                       animationDuration={600}
                       connectNulls
                     />

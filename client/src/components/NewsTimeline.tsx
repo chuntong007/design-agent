@@ -213,13 +213,16 @@ export function NewsTimeline({
   // 本地拖拽值（非受控模式或拖拽中生效）
   const [localLeftPct, setLocalLeftPct] = useState(0)
   const [localRightPct, setLocalRightPct] = useState(100)
-  // 受控模式下：外部 view 变化时同步本地值
+  // 拖拽结束时的最终值（松手后读取上报 onRangeChange）
+  const dragFinalRef = useRef<{ left: number; right: number } | null>(null)
+  // 受控模式下：外部 view 变化时同步本地值（注意：此时绝不触发 onRangeChange，
+  // 否则父组件 handleTimelineRange 回写区间 -> 索引舍入 -> viewDates 微漂移 ->
+  // controlledPct 又变 -> 再上报 -> 无限循环（Maximum update depth exceeded）
   useEffect(() => {
-    if (isControlled) {
-      setLocalLeftPct(controlledLeftPct)
-      setLocalRightPct(controlledRightPct)
-    }
-  }, [isControlled, controlledLeftPct, controlledRightPct])
+    if (!isControlled || dragging !== null) return
+    setLocalLeftPct(controlledLeftPct)
+    setLocalRightPct(controlledRightPct)
+  }, [isControlled, controlledLeftPct, controlledRightPct, dragging])
   const leftPct = dragging !== null ? localLeftPct : isControlled ? controlledLeftPct : localLeftPct
   const rightPct = dragging !== null ? localRightPct : isControlled ? controlledRightPct : localRightPct
   const setLeftPct = setLocalLeftPct
@@ -340,7 +343,7 @@ export function NewsTimeline({
     return m
   }, [anchors])
 
-  // 滑块拖拽
+  // 滑块拖拽：onMove 更新本地值并记录最终值；onUp 结束拖拽
   useEffect(() => {
     if (!dragging) return
     const onMove = (e: MouseEvent | TouchEvent) => {
@@ -352,9 +355,13 @@ export function NewsTimeline({
       let pct = ((clientX - rect.left) / rect.width) * 100
       pct = Math.max(0, Math.min(100, pct))
       if (dragging === 'left') {
-        setLeftPct((cur) => Math.min(pct, rightPct - 2))
+        const nextLeft = Math.min(pct, rightPct - 2)
+        setLocalLeftPct(nextLeft)
+        dragFinalRef.current = { left: nextLeft, right: rightPct }
       } else {
-        setRightPct((cur) => Math.max(pct, leftPct + 2))
+        const nextRight = Math.max(pct, leftPct + 2)
+        setLocalRightPct(nextRight)
+        dragFinalRef.current = { left: leftPct, right: nextRight }
       }
     }
     const onUp = () => {
@@ -372,36 +379,25 @@ export function NewsTimeline({
     }
   }, [dragging, leftPct, rightPct])
 
-  // 滑块释放时回调 onRangeChange（受控模式下仅用户拖拽产生的变化需要上报）
+  // 拖拽结束（dragging -> null）时上报一次用户调整的范围
+  // 受控模式下也只在此时上报；受控值被动变化绝不触发（避免反馈循环）
   useEffect(() => {
     if (dragging !== null) return
-    // 受控模式：外部回写后与受控值一致则不上报
-    if (isControlled) {
-      if (Math.abs(localLeftPct - controlledLeftPct) < 0.5 && Math.abs(localRightPct - controlledRightPct) < 0.5) {
-        lastRangeEmittedRef.current = null
-        return
-      }
-    }
-    if (localLeftPct === 0 && localRightPct === 100) {
-      const wasReset = lastRangeEmittedRef.current === null
-      lastRangeEmittedRef.current = null
-      // 受控模式下从子区间拖回全量时上报重置
-      if (isControlled && !wasReset) {
-        lastRangeEmittedRef.current = { start: xStart, end: xEnd }
-        onRangeChange?.(xStart, xEnd)
-      }
+    const final = dragFinalRef.current
+    dragFinalRef.current = null
+    if (!final) return
+    const { left, right } = final
+    if (left === 0 && right === 100) {
+      onRangeChange?.(xStart, xEnd)
       return
     }
     const startTs = dateToTs(xStart)
     const endTs = dateToTs(xEnd)
-    const start = new Date(startTs + (endTs - startTs) * (localLeftPct / 100)).toISOString().slice(0, 10)
-    const end = new Date(startTs + (endTs - startTs) * (localRightPct / 100)).toISOString().slice(0, 10)
-    const last = lastRangeEmittedRef.current
-    if (last && last.start === start && last.end === end) return
-    lastRangeEmittedRef.current = { start, end }
+    const start = new Date(startTs + (endTs - startTs) * (left / 100)).toISOString().slice(0, 10)
+    const end = new Date(startTs + (endTs - startTs) * (right / 100)).toISOString().slice(0, 10)
     onRangeChange?.(start, end)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dragging, localLeftPct, localRightPct, isControlled, controlledLeftPct, controlledRightPct])
+  }, [dragging])
 
   // 双击空白处重置（受控模式下同时通知父组件）
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
